@@ -1,0 +1,21 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.deliverytransitions'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.deliverytransitions"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+// No Jetpack Compose: the overlay is a plain Android View drawn with Canvas + ValueAnimator.
+// Lighter, and it can never hit Compose's "not attached to a window" crash.
