@@ -47,12 +47,39 @@ class DeliveryTransitionsModule : Module() {
       }
     }
 
+    // resolves when the NEW screen is really on screen (view tree / picture changed), or after the timeout
+    AsyncFunction("screenReady") { timeoutMs: Int, promise: Promise ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        promise.resolve()
+        return@AsyncFunction
+      }
+      activity.runOnUiThread {
+        try {
+          TransitionController.waitForScreen(activity, timeoutMs) { promise.resolve() }
+        } catch (t: Throwable) {
+          promise.resolve()
+        }
+      }
+    }
+
     // optional: start the animation right away while the new screen is still rendering (Android)
     Function("preroll") { optionsJson: String ->
       val activity = appContext.currentActivity
       activity?.runOnUiThread {
         try {
           TransitionController.preroll(activity, optionsJson)
+        } catch (_: Throwable) {
+        }
+      }
+    }
+
+    // the data of a loading element arrived: fresh picture of the new screen, the vehicle goes on (Android)
+    Function("refresh") { ->
+      val activity = appContext.currentActivity
+      activity?.runOnUiThread {
+        try {
+          TransitionController.refresh(activity)
         } catch (_: Throwable) {
         }
       }

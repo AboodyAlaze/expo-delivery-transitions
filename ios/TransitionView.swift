@@ -21,8 +21,22 @@ final class TransitionView: UIView {
   private var link: CADisplayLink?
   private var startTime: CFTimeInterval = 0
   private var duration: Double = 1
+  private var startP: F = 0
   private var done = false
   private var onFinished: (() -> Void)?
+
+  // waiting pre-roll (the vehicle arrives while the new screen is still being prepared)
+  private var waitingT: Transition?
+  private var waitLink: CADisplayLink?
+  private var waitStart: CFTimeInterval = 0
+
+  // hold: the animation stops where an element is still loading its data
+  private var holdAt: F = -1
+  private var holding = false
+  private var holdBegan: CFTimeInterval = 0
+  private var pausedTotal: Double = 0
+  private var released = false
+  private var pendingRefresh: UIImage?
 
   init(frame: CGRect, from: UIImage) {
     self.fromImage = from
@@ -72,25 +86,86 @@ final class TransitionView: UIView {
 
   deinit {
     link?.invalidate()
+    waitLink?.invalidate()
+  }
+
+  /// The new screen is not ready yet: let the transition start its waiting pre-roll.
+  func startWaiting(_ t: Transition, req: TransitionRequest) {
+    if !t.supportsWaiting || transition != nil { return }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    t.prepareWaiting(host: self, req: req)
+    t.updateWaiting(ms: 0, host: self)
+    CATransaction.commit()
+    waitingT = t
+    waitStart = CACurrentMediaTime()
+    let l = CADisplayLink(target: self, selector: #selector(waitTick(_:)))
+    l.add(to: RunLoop.main, forMode: RunLoop.Mode.common)
+    waitLink = l
+  }
+
+  @objc private func waitTick(_ l: CADisplayLink) {
+    guard let t = waitingT else { return }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    t.updateWaiting(ms: (CACurrentMediaTime() - waitStart) * 1000, host: self)
+    CATransaction.commit()
+  }
+
+  private func stopWaiting() {
+    waitLink?.invalidate()
+    waitLink = nil
+    waitingT = nil
+  }
+
+  /// The data of a loading element arrived (fresh picture of the new screen).
+  func refresh(image: UIImage) {
+    guard let t = transition else {
+      pendingRefresh = image  // the animation has not started yet: it starts with this picture
+      return
+    }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    toImage = image
+    toLayer.contents = image.cgImage
+    t.refresh(host: self, image: image)
+    CATransaction.commit()
+    released = true
+    if holding { release() }
+  }
+
+  private func release() {
+    if !holding { return }
+    pausedTotal += CACurrentMediaTime() - holdBegan
+    holding = false
+    released = true
   }
 
   func play(to image: UIImage, transition t: Transition, req: TransitionRequest, finished: @escaping () -> Void) {
     // IMPORTANT: every property change of these stand-alone layers (opacity, position, anchorPoint, mask...) is
     // IMPLICITLY animated by Core Animation (0.25 s) unless actions are disabled. Without this, un-hiding the new
     // screen and then setting its opacity to 0 made the whole new page flash over the list for a quarter of a second.
+    stopWaiting()
+    released = pendingRefresh != nil
+    let shown = pendingRefresh ?? image
+    pendingRefresh = nil
+    holding = false
+    pausedTotal = 0
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    toImage = image
-    toLayer.contents = image.cgImage
-    toLayer.contentsScale = image.scale
+    toImage = shown
+    toLayer.contents = shown.cgImage
+    toLayer.contentsScale = shown.scale
     toContainer.opacity = 1
     toContainer.isHidden = false
     transition = t
     onFinished = finished
     done = false
-    progress = 0
+    startP = t.startProgress
+    progress = startP
     t.prepare(host: self, req: req)
-    t.update(p: 0, host: self)
+    holdAt = released ? -1 : t.holdProgress()
+    t.update(p: startP, host: self)
     CATransaction.commit()
     if t.wantsOverlay { overlay.setNeedsDisplay() }
     hint.isHidden = !t.showsSkipHint
@@ -104,9 +179,27 @@ final class TransitionView: UIView {
   }
 
   @objc private func tick(_ l: CADisplayLink) {
-    let x = min(max((CACurrentMediaTime() - startTime) / duration, 0), 1)
-    let eased = transition?.easing(x) ?? 1
-    step(p: F(eased))
+    let now = CACurrentMediaTime()
+    if holding {
+      // the vehicle waits where the data is still loading; parcels already thrown keep going (they use the idle time)
+      let idle = (now - holdBegan) * 1000
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      transition?.setIdle(ms: idle, host: self)
+      CATransaction.commit()
+      step(p: holdAt)
+      if idle > 3500 { release() }  // the data never came: go on anyway
+      return
+    }
+    let x = min(max(Double(startP) + (now - startTime - pausedTotal) / duration, 0), 1)
+    let eased = F(transition?.easing(x) ?? 1)
+    if holdAt >= 0 && !released && eased >= holdAt {
+      holding = true
+      holdBegan = now
+      step(p: holdAt)
+      return
+    }
+    step(p: eased)
     if x >= 1 { finish() }
   }
 
@@ -130,11 +223,20 @@ final class TransitionView: UIView {
     finish()
   }
 
+  /// Frees the pictures as soon as the overlay is gone.
+  func release(images: Bool) {
+    if images {
+      fromLayer.contents = nil
+      toLayer.contents = nil
+    }
+  }
+
   private func finish() {
     if done { return }
     done = true
     link?.invalidate()
     link = nil
+    stopWaiting()
     let cb = onFinished
     onFinished = nil
     cb?()

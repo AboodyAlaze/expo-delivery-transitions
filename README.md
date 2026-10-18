@@ -89,15 +89,45 @@ useTransitionBackHandler({ fadeBack: (pathname) => pathname.startsWith('/item/')
 ```
 (`fadeBack: true` = every screen. Default `false`.) In your own back buttons use `useTransitionRouter().back()`.
 
-### Delivery transitions: tell them where the cards are
+### Delivery transitions: tell them where the elements are
 
-Wrap up to **5 elements of the destination screen** with `<DeliveryTarget index={0..4}>`. The courier throws a parcel
-at each one and it un-boxes there. Without targets the screen is cut into 5 bands.
+Wrap up to **5 elements of the destination screen** with `<DeliveryTarget index={0..4}>` (top to bottom). The courier
+throws a parcel at each one and the screen opens there.
+
+The new screen is cut into **full-width slices that together cover the whole screen**: no gaps, no lines. Each
+boundary is halfway between two neighbouring elements, and every slice opens where its parcel lands.
 
 ```tsx
-<DeliveryTarget index={0} style={styles.header}>…</DeliveryTarget>
-<DeliveryTarget index={1} style={styles.stats}>…</DeliveryTarget>
+<DeliveryTarget index={0}><Header /></DeliveryTarget>
+<DeliveryTarget index={1}><Stats /></DeliveryTarget>
+<DeliveryTarget index={2}><AddButton /></DeliveryTarget>
+<DeliveryTarget index={3}><List /></DeliveryTarget> {/* a long list: only the part on screen is used */}
 ```
+
+- Fewer than 5 targets are fine (the tallest are split until there are 5). Without any target the screen is cut into 5
+  equal slices.
+- Elements taller than the screen are clipped to the screen.
+- Avoid entering animations (Reanimated `FadeIn` with a delay...) on the first content of the screen: it is photographed
+  right after it appears, so content that is still invisible at that moment is missing in the picture.
+
+### Loading: the vehicle stops where the data is still coming
+
+Say that a target is still loading and the vehicle drives to it, **stops there** (with "?" bubbles) and goes on the
+moment the data has arrived. A slow request never delays the start of the animation, and the header, the numbers... are
+already revealed while the list is still loading.
+
+```tsx
+const { data, isLoading } = useFetch(/* ... */);
+
+<DeliveryTarget index={0}><Header /></DeliveryTarget>
+<DeliveryTarget index={2} loading={isLoading || !data}>
+  <List data={data} />
+</DeliveryTarget>
+```
+
+Draw the real content as soon as the data is there (no extra delays): a fresh picture of the screen is taken at that
+moment. If the data never comes the vehicle goes on after 3.5 s. Items thrown before the stop keep opening while the
+vehicle waits.
 
 ### Options
 
@@ -106,25 +136,52 @@ at each one and it un-boxes there. Without targets the screen is cut into 5 band
 | `name` | `deliveryBike` \| `deliveryCar` \| `liquidPour` \| `ballZoom` \| `radarSweep` \| `hexAperture` \| `curtainDrop` \| `fade` |
 | `origin` | `{ x, y }` in dp (`originFromEvent(e)`). Radar, hex and ball zoom start exactly there |
 | `accent` | colour of the tapped item: liquid, ball, radar, parcel tape… |
-| `durationMs` | override the default duration of the transition |
-| `targets` | delivery only: `{ x, y, width, height }[]` (normally filled from `<DeliveryTarget>`) |
-| `settleMs` | wait for the new screen to render before it is photographed (default 120) |
+| `background` | solid colour behind the animation, default `'#000000'` (nothing is see-through) |
+| `durationMs` | override the default duration (delivery: bike 1200 ms, car 1400 ms) |
+| `targets` | delivery only: `{ x, y, width, height, loading? }[]` (normally filled from `<DeliveryTarget>`) |
+| `screenTimeoutMs` | max wait until the new screen is really on screen (default 3000 for delivery, 700 otherwise) |
+| `readyTimeoutMs` | max wait for `useTransitionReady` (default 400) |
+| `debug` | prints the time of every phase in the console |
 
 **Tap anywhere** while a transition plays to skip it. Hardware back skips it too.
 
+`useTransitionReady(ready)` (optional) makes the transition wait, at most `readyTimeoutMs`, until the new screen says it
+is ready. It is slower on purpose: prefer `loading` on a `<DeliveryTarget>`, which never delays the start.
+
 ## How it works
 
-1. `begin()` — the current screen is photographed and frozen under a full-screen overlay.
-2. Expo Router navigates underneath, as usual.
-3. `play()` — the new screen is photographed and the animation plays between the two photos on the overlay.
-4. The overlay is removed. The real new screen is already there and fully interactive.
+1. `begin()`: the current screen is photographed and frozen under a full-screen overlay (the old screen fades to solid
+   black) and the vehicle slides in at once.
+2. Expo Router navigates underneath, as usual. The vehicle waits at the top with "?" bubbles.
+3. `screenReady()`: the native side watches the real screen and tells JavaScript when the NEW one is on screen. It
+   counts the views (about 1 ms) and takes a tiny 45 x 100 picture every 100 ms; a pressed button or a fading tab bar
+   does not count, a different screen does. No full screenshots are taken while waiting, so this never competes with
+   the work that is mounting the new screen.
+4. `play()`: the new screen is photographed and the animation plays; elements that are still loading stop the vehicle
+   until `refresh()` brings a fresh picture.
+5. The overlay is removed and its two pictures are freed. The real new screen is already there and fully interactive.
 
-**Android**: no Jetpack Compose, a plain `View` drawn with `Canvas` and a `ValueAnimator`.
-**iOS**: a plain `UIView`; the screens are Core Animation layers moved by a `CADisplayLink` (GPU), the vehicles,
-parcels, glass and radar are drawn with Core Graphics on top. Same animations, same JavaScript API.
+**Android**: no Jetpack Compose; a plain `View` drawn with `Canvas` and a `ValueAnimator`.
+**iOS**: a plain `UIView`; the screen slices and parcels are Core Animation layers moved on the GPU, only the small
+vehicle view is redrawn each frame. Same animations, same JavaScript API, same features (waiting, loading, background).
 
-Safety: a watchdog removes the overlay no matter what, and if an animation fails the navigation still happens
-(an animation problem can never lose a navigation). On web and Expo Go the navigation just happens, without animation.
+Safety: a watchdog removes the overlay no matter what, and if an animation fails the navigation still happens (an
+animation problem can never lose a navigation). On web and Expo Go the navigation just happens, without animation.
+
+## Speed
+
+- The wait before the delivery runs is the time JavaScript needs to render the new screen. **Debug builds are several
+  times slower than release builds**: judge the speed with `npx expo run:android --variant release` / `npx expo run:ios --configuration Release`.
+- Use `debug: true` to see where the time goes (`screen frozen`, `navigate() returned`, `new screen rendered`, ...).
+- If a request is slow, mark its element with `loading` instead of waiting for it.
+
+## Troubleshooting
+
+- **The new screen shows up before the animation / the picture of the old screen is the new page.** One tap opens the
+  screen twice: a plain `router.push` / `<Link>` next to the transition call. Keep only the transition one.
+- **The slices show the old screen.** The screen took longer than `screenTimeoutMs` to mount; raise it, or compare with a
+  release build.
+- **Both my own animation and the transition play.** The destination screen needs `options={transitionScreenOptions}`.
 
 ## Try the example
 
@@ -137,53 +194,18 @@ npx expo run:ios                # iOS simulator (needs Xcode + CocoaPods)
 npx expo run:ios --device       # a real iPhone (Xcode signing with your Apple ID is enough)
 ```
 
-The example resolves the package from the parent folder (`metro.config.js` + `expo.autolinking.nativeModulesDir`),
-so edits to `src/` show up instantly. It also has a plain `<Link>` screen, to see that the default navigation is untouched.
+The example resolves the package from the parent folder (`metro.config.js` + `expo.autolinking.nativeModulesDir`), so
+edits to `src/` show up instantly. It also has a plain `<Link>` screen, to see that the default navigation is untouched.
 
 ## Notes & limits
 
 - Screens that contain a `SurfaceView` / `TextureView` (maps, video, camera) are photographed black.
-- While a transition plays, two screen-sized bitmaps are kept in memory.
+- While a transition plays, two screen-sized pictures are kept in memory (freed when it ends).
 - `origin` / `targets` are relative to the React root view (what Expo Router renders), in dp / points.
 - Android minSdk 24, iOS 16.4+.
-- iOS draws the vehicle overlay with Core Graphics every frame: smooth on recent iPhones; on the oldest ones the delivery
-  transitions can drop frames (the screens themselves always move on the GPU).
 - Modals (`presentation: 'modal'`) are not photographed on iOS (they live in their own layer); opt them in only if you test them.
+- The iOS code was type-checked with a Swift compiler against UIKit stubs but has not been built in Xcode here: please test it on a device.
 
 ## License
 
 MIT
-
-## Speed and layout (delivery transitions)
-
-- **Fast:** the bike takes about 1.2 s and the car 1.4 s (you can change it with `durationMs`).
-- **Starts at once (Android):** the vehicle slides in the moment the user taps, while the new screen renders. The old
-  screen stays untouched until the new one is really on screen (the module checks that natively, no guessing).
-- **No gaps, no lines:** the new screen is cut into full-width slices that together cover the whole screen. Their
-  boundaries come from your `<DeliveryTarget>` elements (halfway between two neighbours); every slice opens where its
-  parcel lands. With no targets the screen is cut into 5 equal slices.
-
-```tsx
-<DeliveryTarget index={0}><Header /></DeliveryTarget>
-<DeliveryTarget index={1}><Stats /></DeliveryTarget>
-<DeliveryTarget index={2}><Button /></DeliveryTarget>
-<DeliveryTarget index={3}><List /></DeliveryTarget> {/* a long list: only the part on screen is used */}
-```
-
-Fewer than 5 targets are fine: the tallest ones are split until there are 5. Elements taller than the screen are clipped
-to the screen.
-
-**Tip:** avoid entering animations (for example Reanimated `FadeIn` with a delay) on the first screen content. The new
-screen is photographed right after it renders, so content that is still invisible at that moment is missing in the picture.
-
-## Optional
-
-**`useTransitionReady(ready)`** makes the transition wait (at most `readyTimeoutMs`, default 1500) until the new screen
-says it is ready. It is SLOWER on purpose: use it only if you prefer a finished picture over speed.
-
-**`debug: true`** prints the time of every phase:
-
-```tsx
-router.push('/details', { name: 'deliveryBike', debug: true });
-// [expo-delivery-transitions] screen frozen: +25 ms (total 25 ms)
-```

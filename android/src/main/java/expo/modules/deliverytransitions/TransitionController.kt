@@ -25,6 +25,8 @@ import org.json.JSONObject
  */
 internal object TransitionController {
   private const val TAG = "DeliveryTransitions"
+  private const val PROBE_W = 45
+  private const val PROBE_H = 100
   private val main = Handler(Looper.getMainLooper())
 
   private var host: ViewGroup? = null
@@ -34,6 +36,8 @@ internal object TransitionController {
   private var watchdog: Runnable? = null
   private var waitingTransition: Transition? = null
   private var waitingName: String? = null
+  private var fromCount = 0
+  private var fromProbe: IntArray? = null
 
   @Volatile
   var isRunning: Boolean = false
@@ -54,6 +58,8 @@ internal object TransitionController {
     host = content
     rnRoot = root
     overlay = view
+    fromCount = countViews(root)
+    fromProbe = probe(activity, root)
     isRunning = true
     armWatchdog(8000L) // nothing can keep the app blocked for ever
   }
@@ -71,10 +77,47 @@ internal object TransitionController {
   }
 
   /**
-   * Step 2: the new screen is rendered, play. [onDone] is called exactly once, when the animation ends or is skipped.
-   * If the screenshot still equals the frozen old screen (the new one is not on screen yet) it is retaken a few
-   * milliseconds later, so the animation never starts on a stale picture.
+   * Calls [done] when the NEW screen is really on screen: its view tree has many more (or fewer) views than the old
+   * screen, or the tiny picture of the screen is clearly another screen. A pressed button or a fading tab bar is not
+   * enough. Two frames later (so it is laid out), or after [timeoutMs], whichever comes first.
+   * Cheap on purpose: counting views costs about a millisecond and the tiny picture is taken only every 100 ms, so this
+   * never competes with the work that is mounting the new screen.
    */
+  fun waitForScreen(activity: Activity, timeoutMs: Int, done: () -> Unit) {
+    val view = overlay
+    val root = rnRoot
+    if (!isRunning || view == null || root == null) {
+      done()
+      return
+    }
+    armWatchdog(timeoutMs + 5000L)
+    val t0 = SystemClock.uptimeMillis()
+    var nextProbeAt = t0 + 200L // the view count catches almost every screen; the picture is only the second opinion
+    val step = object : Runnable {
+      override fun run() {
+        if (!isRunning || overlay !== view) {
+          done()
+          return
+        }
+        val now = SystemClock.uptimeMillis()
+        var changed = Math.abs(countViews(root) - fromCount) >= 25
+        if (!changed && now >= nextProbeAt) {
+          val s = SystemClock.uptimeMillis()
+          changed = meanDiff(probe(activity, root), fromProbe) >= 6.0
+          // never let the watching cost the app more than about 4% of one core: slow screens are probed less often
+          nextProbeAt = SystemClock.uptimeMillis() + maxOf(250L, (SystemClock.uptimeMillis() - s) * 25L)
+        }
+        if (changed || now - t0 >= timeoutMs) {
+          main.postDelayed({ done() }, 17L) // one frame: the new views are laid out
+        } else {
+          main.postDelayed(this, 33L)
+        }
+      }
+    }
+    step.run()
+  }
+
+  /** Step 2: the new screen is rendered, play. [onDone] is called exactly once, when the animation ends or is skipped. */
   fun play(activity: Activity, json: String, onDone: () -> Unit) {
     val view = overlay
     val root = rnRoot
@@ -84,21 +127,9 @@ internal object TransitionController {
     }
     val req = parse(json, activity.resources.displayMetrics.density)
     pendingDone = onDone
-    attempt(activity, view, root, req, SystemClock.uptimeMillis())
-  }
-
-  private fun attempt(activity: Activity, view: TransitionView, root: View, req: TransitionRequest, t0: Long) {
-    if (!isRunning || overlay !== view) return
     val toBmp = capture(activity, root)
     if (toBmp == null) {
       finish() // also reports "done" to JavaScript
-      return
-    }
-    val old = view.frozen()
-    val stale = old != null && sameScreen(old, toBmp)
-    if (stale && SystemClock.uptimeMillis() - t0 < 700L) {
-      armWatchdog(4000L)
-      main.postDelayed({ attempt(activity, view, root, req, t0) }, 24L)
       return
     }
     val waiting = waitingTransition
@@ -108,18 +139,52 @@ internal object TransitionController {
     view.play(toBmp, t, req) { finish() }
   }
 
-  /** Cheap check (800 sample points): do the two screenshots show the same screen? */
-  private fun sameScreen(a: Bitmap, b: Bitmap): Boolean {
-    if (a.width != b.width || a.height != b.height) return false
-    var different = 0
-    for (iy in 1..40) {
-      val y = (a.height * iy / 41).coerceIn(0, a.height - 1)
-      for (ix in 1..20) {
-        val x = (a.width * ix / 21).coerceIn(0, a.width - 1)
-        if (a.getPixel(x, y) != b.getPixel(x, y) && ++different >= 8) return false
+  private fun countViews(v: View): Int {
+    var n = 1
+    if (v is ViewGroup) for (i in 0 until v.childCount) n += countViews(v.getChildAt(i))
+    return n
+  }
+
+  /** A tiny grey picture of the screen (45 x 100), to tell "another screen" from "the same screen, pressed". */
+  private fun probe(activity: Activity, v: View): IntArray? {
+    val w = v.width
+    val h = v.height
+    if (w <= 0 || h <= 0) return null
+    return try {
+      val bmp = Bitmap.createBitmap(PROBE_W, PROBE_H, Bitmap.Config.ARGB_8888)
+      val canvas = Canvas(bmp)
+      canvas.scale(PROBE_W / w.toFloat(), PROBE_H / h.toFloat())
+      activity.window.decorView.background?.let {
+        it.setBounds(0, 0, w, h)
+        it.draw(canvas)
       }
+      v.draw(canvas)
+      val px = IntArray(PROBE_W * PROBE_H)
+      bmp.getPixels(px, 0, PROBE_W, 0, 0, PROBE_W, PROBE_H)
+      bmp.recycle()
+      IntArray(px.size) { i ->
+        val p = px[i]
+        (((p shr 16) and 0xFF) * 299 + ((p shr 8) and 0xFF) * 587 + (p and 0xFF) * 114) / 1000
+      }
+    } catch (t: Throwable) {
+      null
     }
-    return true
+  }
+
+  private fun meanDiff(a: IntArray?, b: IntArray?): Double {
+    if (a == null || b == null || a.size != b.size) return 0.0
+    var sum = 0L
+    for (i in a.indices) sum += Math.abs(a[i] - b[i])
+    return sum.toDouble() / a.size
+  }
+
+  /** The data of a loading element arrived: take a fresh picture of the new screen and let the vehicle go on. */
+  fun refresh(activity: Activity) {
+    val view = overlay ?: return
+    val root = rnRoot ?: return
+    if (!isRunning) return
+    val bmp = capture(activity, root) ?: return
+    view.refresh(bmp)
   }
 
   /** Jump to the end of the running transition. */
@@ -151,7 +216,12 @@ internal object TransitionController {
     host = null
     rnRoot = null
     isRunning = false
-    view?.let { v -> (v.parent as? ViewGroup)?.removeView(v) }
+    view?.let { v ->
+      (v.parent as? ViewGroup)?.removeView(v)
+      // give the pictures back a moment later, when no frame can still be using them
+      main.postDelayed({ v.recycleBitmaps() }, 200L)
+    }
+    fromProbe = null
     done?.invoke()
   }
 
@@ -165,6 +235,7 @@ internal object TransitionController {
   private fun parse(json: String, d: Float): TransitionRequest {
     val o = JSONObject(json)
     val targets = ArrayList<RectF>()
+    val flags = ArrayList<Boolean>()
     val arr = o.optJSONArray("targets")
     if (arr != null) {
       for (i in 0 until arr.length()) {
@@ -173,7 +244,10 @@ internal object TransitionController {
         val y = t.optDouble("y", 0.0).toFloat() * d
         val w = t.optDouble("width", 0.0).toFloat() * d
         val h = t.optDouble("height", 0.0).toFloat() * d
-        if (w > 0f && h > 0f) targets.add(RectF(x, y, x + w, y + h))
+        if (w > 0f && h > 0f) {
+          targets.add(RectF(x, y, x + w, y + h))
+          flags.add(t.optBoolean("loading", false))
+        }
       }
     }
     return TransitionRequest(
@@ -184,6 +258,8 @@ internal object TransitionController {
       durationMs = o.optInt("durationMs", 0),
       targets = targets,
       density = d,
+      loading = flags,
+      background = o.optLong("background", 0xFF000000L).toInt() or 0xFF000000.toInt(), // always opaque
     )
   }
 

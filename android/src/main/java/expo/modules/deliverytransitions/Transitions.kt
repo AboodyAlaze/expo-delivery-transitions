@@ -28,6 +28,10 @@ internal class TransitionRequest(
   val durationMs: Int,
   val targets: List<RectF>,
   val density: Float,
+  /** One flag per target: that element is still loading its data (the vehicle waits there). */
+  val loading: List<Boolean> = emptyList(),
+  /** The solid colour behind everything while the animation runs (black by default). */
+  val background: Int = 0xFF000000.toInt(),
 )
 
 /** One animation between two screenshots. [p] goes 0 -> 1 (it may overshoot for "elastic" easings). */
@@ -44,6 +48,12 @@ internal abstract class Transition {
   open val supportsWaiting: Boolean get() = false
   open fun prepareWaiting(from: Bitmap, w: Float, h: Float, req: TransitionRequest) {}
   open fun drawWaiting(c: Canvas, from: Bitmap, ms: Long, w: Float, h: Float) {}
+
+  /** Progress at which the animation must stop and wait for the data of a loading element (-1 = never). */
+  open fun holdProgress(): Float = -1f
+
+  /** Milliseconds spent waiting at the hold point (0 when not waiting): lets the transition draw an idle state. */
+  var idleMs: Long = 0L
 
   /** Where the timeline starts (a transition that already played its first part while waiting skips it). */
   open val startProgress: Float get() = 0f

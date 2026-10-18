@@ -7,6 +7,10 @@ struct TransitionRequest {
   let accent: UIColor
   let durationMs: Int
   let targets: [CGRect]
+  /// One flag per target: that element is still loading its data (the vehicle waits there).
+  let loading: [Bool]
+  /// The solid colour behind everything while the animation runs (black by default).
+  let background: UIColor
 }
 
 /// One animation between two screenshots. `p` goes 0 -> 1 (it may overshoot for "elastic" easings).
@@ -19,12 +23,33 @@ protocol Transition: AnyObject {
   func prepare(host: TransitionView, req: TransitionRequest)
   func update(p: F, host: TransitionView)
   func drawOverlay(_ c: CGContext, p: F, size: CGSize)
+
+  /// "Waiting" pre-roll (delivery only): the animation STARTS before the new screen is ready (the vehicle arrives and
+  /// waits), so a slow screen never looks like a frozen app. The same instance continues when the screen is ready.
+  var supportsWaiting: Bool { get }
+  func prepareWaiting(host: TransitionView, req: TransitionRequest)
+  func updateWaiting(ms: Double, host: TransitionView)
+  /// Where the timeline starts (a transition that already played its first part while waiting skips it).
+  var startProgress: F { get }
+  /// Progress at which the animation must stop and wait for the data of a loading element (-1 = never).
+  func holdProgress() -> F
+  /// Called every frame while waiting at the hold point, with the time spent there.
+  func setIdle(ms: Double, host: TransitionView)
+  /// The data arrived: a fresh picture of the new screen.
+  func refresh(host: TransitionView, image: UIImage)
 }
 
 extension Transition {
   var wantsOverlay: Bool { return false }
   var showsSkipHint: Bool { return true }
   func drawOverlay(_ c: CGContext, p: F, size: CGSize) {}
+  var supportsWaiting: Bool { return false }
+  func prepareWaiting(host: TransitionView, req: TransitionRequest) {}
+  func updateWaiting(ms: Double, host: TransitionView) {}
+  var startProgress: F { return 0 }
+  func holdProgress() -> F { return -1 }
+  func setIdle(ms: Double, host: TransitionView) {}
+  func refresh(host: TransitionView, image: UIImage) {}
 }
 
 private let fastOutSlowIn = CubicBezier(x1: 0.4, y1: 0, x2: 0.2, y2: 1)

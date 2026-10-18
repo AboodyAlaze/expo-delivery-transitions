@@ -8,7 +8,14 @@ export type TransitionName =
   | 'curtainDrop'
   | 'fade';
 
-export type TransitionRect = { x: number; y: number; width: number; height: number };
+export type TransitionRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** The element is still loading its data: the vehicle stops there until the data arrives. */
+  loading?: boolean;
+};
 
 export type TransitionOptions = {
   /** Which animation. Default: 'fade'. */
@@ -24,13 +31,17 @@ export type TransitionOptions = {
    * Normally filled in automatically from the `<DeliveryTarget>` components of the new screen.
    */
   targets?: TransitionRect[];
-  /** Time to wait for the new screen to render before it is photographed. Default 120 ms. */
+  /** Max time (ms) to wait until the new screen is really on screen. Default 3000. */
+  screenTimeoutMs?: number;
+  /** Fallback only (old native builds): time to wait for the new screen to render before it is photographed. */
   settleMs?: number;
   /**
-   * Max time (ms) to wait for the NEW screen to say it is ready (see `useTransitionReady`). Default 1500.
+   * Max time (ms) to wait for the NEW screen to say it is ready (see `useTransitionReady`). Default 400 (speed first).
    * Only matters for screens that call `useTransitionReady`; other screens are never waited for.
    */
   readyTimeoutMs?: number;
+  /** Solid colour behind the animation (the old screen fades into it). Default black. */
+  background?: string;
   /** Prints the time of every phase (freeze / navigate / render / ready / measure / animation) in the console. */
   debug?: boolean;
 };

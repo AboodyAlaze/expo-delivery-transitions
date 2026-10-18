@@ -31,3 +31,12 @@ describe('clipTargets', () => {
     expect(out).toEqual([r(0, 40), r(300, 500)]);
   });
 });
+
+describe('loading flag', () => {
+  it('survives clipping and splitting', () => {
+    const out = fillTargets(clipTargets([{ ...r(0, 40) }, { ...r(100, 600), loading: true }], 800));
+    expect(out).toHaveLength(5);
+    expect(out.filter((o) => o.loading).length).toBeGreaterThan(0);
+    expect(out[0].loading).toBeUndefined();
+  });
+});

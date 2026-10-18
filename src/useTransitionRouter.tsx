@@ -23,10 +23,32 @@ type ForwardOptions = TransitionOptions & NavOptions;
 
 /** Splits "transition options + Expo Router's own options" so each one reaches the right place. */
 function split(options?: ForwardOptions): { transition: TransitionOptions; nav: NavOptions } {
-  const { name, origin, accent, durationMs, targets, settleMs, readyTimeoutMs, debug, ...nav } =
-    options ?? {};
+  const {
+    name,
+    origin,
+    accent,
+    durationMs,
+    targets,
+    settleMs,
+    readyTimeoutMs,
+    debug,
+    background,
+    screenTimeoutMs,
+    ...nav
+  } = options ?? {};
   return {
-    transition: { name, origin, accent, durationMs, targets, settleMs, readyTimeoutMs, debug },
+    transition: {
+      name,
+      origin,
+      accent,
+      durationMs,
+      targets,
+      settleMs,
+      readyTimeoutMs,
+      debug,
+      background,
+      screenTimeoutMs,
+    },
     nav: nav as NavOptions,
   };
 }

@@ -63,10 +63,11 @@ final class Plan {
   }
 
   /// 0..1, > 0 while the courier swings his arm to throw.
-  func throwPulse(_ p: F) -> F {
+  func throwPulse(_ p: F, lag: F = 0, split: F = -1) -> F {
     var m: F = 0
     for j in 0..<n {
-      let t = clamp01((p - (toss(j) - 0.012)) / 0.05)
+      let pj = (split >= 0 && toss(j) < split) ? p + lag : p
+      let t = clamp01((pj - (toss(j) - 0.012)) / 0.05)
       m = max(m, sin(F.pi * t))
     }
     return m
@@ -78,207 +79,361 @@ final class Plan {
     return 0
   }
 
-  func trunkOpen(_ p: F) -> F {
+  func trunkOpen(_ p: F, lag: F = 0, split: F = -1) -> F {
     if !car { return 0 }
     var m: F = 0
     for j in 0..<n {
-      let t1 = smoothStep((p - arrive[j]) / 0.010)
-      let t2 = 1 - smoothStep((p - (arrive[j] + dwell - 0.010)) / 0.010)
+      let pj = (split >= 0 && toss(j) < split) ? p + lag : p
+      let t1 = smoothStep((pj - arrive[j]) / 0.010)
+      let t2 = 1 - smoothStep((pj - (arrive[j] + dwell - 0.010)) / 0.010)
       m = max(m, min(t1, t2))
     }
     return m
   }
 }
 
-/// DELIVERY DROP. The old screen steps aside, the vehicle drives down the left side and throws a parcel (with the logo)
-/// to the spot of every card of the new screen; the parcel un-boxes into that card.
-/// The cards come from the REAL new screen (JavaScript passes the rectangles of up to 5 elements); without them the
-/// screen is simply cut into 5 bands.
+/// A small view that draws the vehicle (only this small area is redrawn each frame, never the whole screen).
+final class VehicleView: UIView {
+  var paint: ((CGContext) -> Void)?
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    backgroundColor = UIColor.clear
+    isOpaque = false
+    isUserInteractionEnabled = false
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  override func draw(_ rect: CGRect) {
+    guard let c = UIGraphicsGetCurrentContext() else { return }
+    paint?(c)
+  }
+}
+
+/// DELIVERY DROP. The vehicle starts driving the moment the user taps (while the new screen is still rendering), then
+/// drives down the left side and throws a parcel (with the logo) to every element of the new screen.
+///
+/// The new screen is cut into horizontal slices that together cover the WHOLE screen (no gaps, no lines): the
+/// boundaries come from the real elements (DeliveryTarget, or five equal bands when there are none), and every slice
+/// opens where its parcel lands. Everything is moved with Core Animation layers (GPU); only the small vehicle view is
+/// redrawn each frame.
 final class DeliveryTransition: Transition {
   private let car: Bool
   private var art = VehicleArt(d: 1)
   private var plan: Plan?
-  private var rects: [CGRect] = []
-  private var cardLayers: [CALayer] = []
+  private var items: [CGRect] = []
+  private var tileLayers: [CALayer] = []
+  private var tiles: [CGRect] = []
+  private var parcelLayers: [CALayer] = []
+  private var bubbles: [CATextLayer] = []
+  private var vehicle: VehicleView?
+  private var cx: [F] = []
+  private var cy: [F] = []
+  private var loadIdx = -1  // the first element that is still loading: the vehicle stops there
   private var laneX: F = 0
   private var accent = UIColor.systemOrange
   private let d: F = 1
+  private var dur: Double = 1.2
+  private var scale: CGFloat = 2
+
+  // waiting pre-roll
+  private var waited = false
+  private var roadTop: F = 0
+  private var holdY: F = 0
+  private var lastVy: F = 0
+  private var waitAlpha: F = 1
+  private var idleMs: Double = 0
+  private var lastIdleMs: Double = 0
+
+  // what the vehicle view draws this frame
+  private var armOut: F = 0
+  private var brake: F = 0
+  private var trunk: F = 0
 
   init(car: Bool) {
     self.car = car
   }
 
-  var defaultMs: Int { return car ? 3200 : 2600 }
+  var defaultMs: Int { return car ? 1400 : 1200 }
   var easing: (Double) -> Double { return { $0 } }
-  var wantsOverlay: Bool { return true }
-  var showsSkipHint: Bool { return true }
+  var wantsOverlay: Bool { return false }
+  var showsSkipHint: Bool { return false }
+  var supportsWaiting: Bool { return true }
+  var startProgress: F { return waited ? RIDE_START : 0 }
 
-  func prepare(host: TransitionView, req: TransitionRequest) {
-    let size = host.bounds.size
-    art = VehicleArt(d: d)
+  // MARK: actors (vehicle, bubbles)
+
+  private func ensureActors(host: TransitionView, req: TransitionRequest) {
+    scale = host.fromImage.scale
     accent = req.accent
-    rects = req.targets.count >= BLOCKS ? Array(req.targets.prefix(BLOCKS)) : fallbackTargets(size)
-    let y0 = -90 * d
-    let y1 = size.height + 90 * d
-    let lead = (car ? 40 : 46) * d
+    host.backgroundColor = req.background
     laneX = (car ? 52 : 40) * d
-    plan = Plan(ys: rects.map { $0.midY }, car: car, y0: y0, y1: y1, lead: lead)
-
-    if let image = host.toImage, let cg = image.cgImage {
-      host.backgroundColor = pixelColor(cg, x: 2, y: 2) ?? UIColor.white
-      let sc = image.scale
-      for r in rects {
-        let layer = CALayer()
-        layer.frame = r
-        layer.contentsGravity = .resize
-        layer.contentsScale = sc
-        layer.opacity = 0
-        let crop = CGRect(x: r.minX * sc, y: r.minY * sc, width: r.width * sc, height: r.height * sc)
-        layer.contents = cg.cropping(to: crop)
-        host.stage.addSublayer(layer)
-        cardLayers.append(layer)
+    roadTop = -90 * d
+    if vehicle == nil {
+      art = VehicleArt(d: d)
+      let side: CGFloat = 280
+      let v = VehicleView(frame: CGRect(x: 0, y: 0, width: side, height: side))
+      v.contentScaleFactor = scale
+      v.isHidden = true
+      v.paint = { [weak self] c in
+        guard let s = self else { return }
+        let m: F = 140
+        if s.car {
+          s.art.car(c, cx: m, cy: m, heading: 90, braking: s.brake, trunk: s.trunk)
+        } else {
+          s.art.bike(c, cx: m, cy: m, heading: 90, armOut: s.armOut)
+        }
+      }
+      host.addSubview(v)
+      vehicle = v
+      for _ in 0..<3 {
+        let t = CATextLayer()
+        t.string = "?"
+        t.fontSize = 20
+        t.alignmentMode = .center
+        t.foregroundColor = accent.cgColor
+        t.contentsScale = scale
+        t.bounds = CGRect(x: 0, y: 0, width: 24, height: 26)
+        t.opacity = 0
+        host.stage.addSublayer(t)
+        bubbles.append(t)
       }
     }
-    host.toContainer.opacity = 0
   }
 
-  func update(p: F, host: TransitionView) {
-    guard let pl = plan else { return }
-    // the old screen steps aside
-    let e = smoothStep(p / 0.22)
-    host.fromLayer.opacity = Float(1 - e)
-    let s = 1 - 0.08 * e
-    host.fromLayer.transform = CATransform3DMakeScale(s, s, 1)
-
-    // the cards of the new screen, "un-boxed" one by one
-    for j in 0..<min(BLOCKS, cardLayers.count) {
-      let t = clamp01((p - pl.toss(j) - pl.fly) / pl.unbox)
-      let layer = cardLayers[j]
-      if t <= 0 {
-        layer.opacity = 0
-      } else {
-        let sc = lf(0.08, 1, easeOutBack(t))
-        layer.transform = CATransform3DMakeScale(sc, sc, 1)
-        layer.opacity = Float(min(t * 3, 1))
-      }
+  private func placeVehicle(vy: F, visible: Bool) {
+    guard let v = vehicle else { return }
+    v.isHidden = !visible
+    if visible {
+      v.center = CGPoint(x: laneX, y: vy)
+      v.setNeedsDisplay()
     }
-
-    // at the very end the complete real screen (status bar, everything else) takes over
-    host.toContainer.opacity = Float(smoothStep((p - 0.93) / 0.07))
   }
 
-  func drawOverlay(_ c: CGContext, p: F, size: CGSize) {
-    guard let pl = plan else { return }
-    drawVehicles(c, pl, p)
-    drawStamp(c, p, size)
+  /// "?" bubbles float up from the vehicle while it waits (for the new screen, or for the data of a loading element).
+  private func showBubbles(vy: F, ms: Double) {
+    for (k, b) in bubbles.enumerated() {
+      let t = (F(ms) / 1100 + F(k) / 3).truncatingRemainder(dividingBy: 1)
+      let x = laneX + 34 * d + sin(t * 6.2832 + F(k)) * 9 * d
+      let y = vy - 34 * d - t * 64 * d
+      b.position = CGPoint(x: x, y: y)
+      b.opacity = Float(max(0, min(1, sin(F.pi * t))))
+    }
   }
 
-  private func fallbackTargets(_ size: CGSize) -> [CGRect] {
-    let top = 96 * d
-    let bottom = size.height - 48 * d
-    let gap = 14 * d
-    let hh = (bottom - top - gap * F(BLOCKS - 1)) / F(BLOCKS)
+  private func hideBubbles() {
+    for b in bubbles { b.opacity = 0 }
+  }
+
+  // MARK: waiting
+
+  func prepareWaiting(host: TransitionView, req: TransitionRequest) {
+    ensureActors(host: host, req: req)
+    holdY = 64 * d
+    lastVy = roadTop
+    waited = true
+  }
+
+  func updateWaiting(ms: Double, host: TransitionView) {
+    // the old screen fades to solid black: the tap was understood and something is happening
+    waitAlpha = 1 - smoothStep(F(ms) / 240)
+    host.fromLayer.opacity = Float(waitAlpha)
+    let arrive = easeOutCubic(F(ms) / 300)
+    let bob: F = arrive >= 1 ? sin(F(ms) / 170) * 2 * d : 0
+    let vy = lf(roadTop, holdY, arrive) + bob
+    lastVy = vy
+    armOut = 0
+    brake = 0
+    trunk = 0
+    placeVehicle(vy: vy, visible: vy > roadTop + 1)
+    if arrive >= 1 { showBubbles(vy: vy, ms: ms - 300) } else { hideBubbles() }
+  }
+
+  // MARK: run
+
+  /// The real elements, clamped to the screen, top to bottom. Five equal bands when JavaScript gave none.
+  private func elements(_ targets: [CGRect], _ loading: [Bool], _ size: CGSize) -> [(rect: CGRect, loading: Bool)] {
+    let minSize = 24 * d
+    var list: [(rect: CGRect, loading: Bool)] = []
+    for (i, t) in targets.enumerated() {
+      let r = t.intersection(CGRect(origin: .zero, size: size))
+      if r.isNull || r.width < minSize || r.height < minSize { continue }
+      list.append((rect: r, loading: i < loading.count ? loading[i] : false))
+    }
+    list.sort { $0.rect.minY < $1.rect.minY }
+    if !list.isEmpty { return Array(list.prefix(BLOCKS)) }
+    let band = size.height / F(BLOCKS)
+    return (0..<BLOCKS).map { (rect: CGRect(x: 0, y: F($0) * band, width: size.width, height: band), loading: false) }
+  }
+
+  /// Full-width slices from the top edge to the bottom edge; each boundary is halfway between two neighbouring
+  /// elements (rounded to whole pixels, so neighbouring slices never leave a hairline).
+  private func tile(_ elems: [CGRect], _ size: CGSize) -> [CGRect] {
     var out: [CGRect] = []
-    for i in 0..<BLOCKS {
-      let y = top + F(i) * (hh + gap)
-      out.append(CGRect(x: 16 * d, y: y, width: size.width - 32 * d, height: hh))
+    var top: F = 0
+    for i in 0..<elems.count {
+      var bottom: F = size.height
+      if i < elems.count - 1 {
+        let mid = (elems[i].maxY + elems[i + 1].minY) / 2
+        bottom = min(max((mid * scale).rounded() / scale, top + 1 / scale), size.height)
+      }
+      out.append(CGRect(x: 0, y: top, width: size.width, height: bottom - top))
+      top = bottom
     }
     return out
   }
 
-  private func drawVehicles(_ c: CGContext, _ pl: Plan, _ p: F) {
-    let vy = pl.yAt(p)
-    let active = p > RIDE_START && p < pl.endT && vy > pl.y0 + 1 && vy < pl.y1 - 1
+  private func crop(_ cg: CGImage, _ r: CGRect) -> CGImage? {
+    return cg.cropping(
+      to: CGRect(x: r.minX * scale, y: r.minY * scale, width: r.width * scale, height: r.height * scale))
+  }
 
-    // the road behind the vehicle
-    if active {
-      if car {
-        c.setFillColor(UIColor.black.a(0.05).cgColor)
-        c.fill(CGRect(x: laneX - 40 * d, y: pl.y0, width: 80 * d, height: vy - pl.y0))
+  private func makeParcelSprite(_ side: CGFloat) -> CGImage? {
+    let format = UIGraphicsImageRendererFormat.default()
+    format.scale = scale
+    let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
+    let image = renderer.image { ctx in
+      self.art.parcel(ctx.cgContext, cx: side / 2, cy: side / 2, size: 50 * self.d, rotDeg: 0, color: self.accent, alpha: 1)
+    }
+    return image.cgImage
+  }
+
+  func prepare(host: TransitionView, req: TransitionRequest) {
+    let size = host.bounds.size
+    ensureActors(host: host, req: req)
+    dur = Double(req.durationMs > 0 ? req.durationMs : defaultMs) / 1000
+
+    let found = elements(req.targets, req.loading, size)
+    items = found.map { $0.rect }
+    loadIdx = found.firstIndex { $0.loading } ?? -1
+    tiles = tile(items, size)
+    cx = items.map { $0.midX }
+    cy = items.map { $0.midY }
+
+    let y1 = size.height + 90 * d
+    let lead = (car ? 40 : 46) * d
+    // continue from where the vehicle is waiting (never below the first stop, or it would have to drive backwards)
+    let y0: F = waited ? min(lastVy, cy[0] - lead - 8 * d) : roadTop
+    plan = Plan(ys: cy, car: car, y0: y0, y1: y1, lead: lead)
+
+    // slices of the new screen: each one scales around the spot where its parcel lands
+    for l in tileLayers { l.removeFromSuperlayer() }
+    tileLayers = []
+    if let image = host.toImage, let cg = image.cgImage {
+      for (j, r) in tiles.enumerated() {
+        let layer = CALayer()
+        layer.bounds = CGRect(x: 0, y: 0, width: r.width, height: r.height)
+        layer.anchorPoint = CGPoint(x: (cx[j] - r.minX) / r.width, y: (cy[j] - r.minY) / r.height)
+        layer.position = CGPoint(x: cx[j], y: cy[j])
+        layer.contentsGravity = .resize
+        layer.contentsScale = scale
+        layer.opacity = 0
+        layer.contents = crop(cg, r)
+        host.stage.addSublayer(layer)
+        tileLayers.append(layer)
       }
-      c.saveGState()
-      c.setStrokeColor(UIColor.black.a(0.13).cgColor)
-      c.setLineWidth(3 * d)
-      c.setLineDash(phase: 0, lengths: [14 * d, 12 * d])
-      c.move(to: CGPoint(x: laneX, y: pl.y0))
-      c.addLine(to: CGPoint(x: laneX, y: vy))
-      c.strokePath()
-      c.restoreGState()
+    }
+
+    // parcels: one small sprite layer each, moved and rotated by the GPU
+    for l in parcelLayers { l.removeFromSuperlayer() }
+    parcelLayers = []
+    let side: CGFloat = 90
+    let sprite = makeParcelSprite(side)
+    for _ in 0..<items.count {
+      let l = CALayer()
+      l.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+      l.contentsScale = scale
+      l.contents = sprite
+      l.opacity = 0
+      host.stage.addSublayer(l)
+      parcelLayers.append(l)
+    }
+    for b in bubbles { host.stage.addSublayer(b) }  // keep the bubbles above the parcels
+    host.toContainer.opacity = 0
+  }
+
+  func holdProgress() -> F {
+    guard let pl = plan, loadIdx >= 0, loadIdx < pl.n else { return -1 }
+    return pl.arrive[loadIdx]
+  }
+
+  func setIdle(ms: Double, host: TransitionView) {
+    idleMs = ms
+    if ms > lastIdleMs { lastIdleMs = ms }
+  }
+
+  func refresh(host: TransitionView, image: UIImage) {
+    guard let cg = image.cgImage else { return }
+    for (j, layer) in tileLayers.enumerated() where j >= max(loadIdx, 0) {
+      layer.contents = crop(cg, tiles[j])
+    }
+  }
+
+  func update(p: F, host: TransitionView) {
+    guard let pl = plan else { return }
+    let lag: F = dur > 0 ? F(lastIdleMs / 1000 / dur) : 0
+    let split = holdProgress()
+
+    // the old screen steps aside
+    let e: F = waited ? smoothStep((p - RIDE_START) / 0.14) : smoothStep(p / 0.20)
+    host.fromLayer.opacity = Float((1 - e) * (waited ? waitAlpha : 1))
+
+    // every slice of the new screen opens where its parcel landed
+    for j in 0..<tileLayers.count {
+      let pj = (split >= 0 && pl.toss(j) < split) ? p + lag : p
+      let t = clamp01((pj - pl.toss(j) - pl.fly) / pl.unbox)
+      let layer = tileLayers[j]
+      if t <= 0 {
+        layer.opacity = 0
+      } else if t >= 1 {
+        layer.transform = CATransform3DIdentity
+        layer.opacity = 1
+      } else {
+        let sc = lf(0.08, 1, easeOutCubic(t))
+        layer.transform = CATransform3DMakeScale(sc, sc, 1)
+        layer.opacity = Float(min(t * 4, 1))
+      }
     }
 
     // parcels in the air
-    for j in 0..<min(pl.n, rects.count) {
-      let r = rects[j]
+    for j in 0..<parcelLayers.count {
       let ts = pl.toss(j)
-      let fl = clamp01((p - ts) / pl.fly)
-      let op = clamp01((p - ts - pl.fly) / pl.unbox)
+      let pj = (split >= 0 && ts < split) ? p + lag : p
+      let fl = clamp01((pj - ts) / pl.fly)
+      let op = clamp01((pj - ts - pl.fly) / pl.unbox)
+      let layer = parcelLayers[j]
       if fl > 0 && op < 0.4 {
         let vyT = pl.yAt(ts)
         // out of the trunk / out of the rider's hand
         let sx = car ? laneX : laneX + 40 * d
         let sy = car ? vyT - 56 * d : vyT + 4 * d
-        let x = lf(sx, r.midX, fl)
-        let y = lf(sy, r.midY, fl) - 70 * d * 4 * fl * (1 - fl)
+        let x = lf(sx, cx[j], fl)
+        let y = lf(sy, cy[j], fl) - 70 * d * 4 * fl * (1 - fl)
         let born = 0.5 + 0.5 * smoothStep(fl / 0.2)
-        let size = 50 * d * born * (1 - op * 0.6)
-        // 720 degrees = two full turns, so the logo lands upright
-        art.parcel(c, cx: x, cy: y, size: size, rotDeg: 720 * fl, color: accent, alpha: 1 - op * 2.5)
+        let k = born * (1 - op * 0.6)  // 1.0 = full size (50 pt)
+        let rot = CATransform3DMakeRotation(720 * fl * F.pi / 180, 0, 0, 1)  // two full turns: the logo lands upright
+        layer.position = CGPoint(x: x, y: y)
+        layer.transform = CATransform3DConcat(rot, CATransform3DMakeScale(k, k, 1))
+        layer.opacity = Float(max(0, min(1, 1 - op * 2.5)))
+      } else {
+        layer.opacity = 0
       }
     }
 
     // the vehicle
-    if active {
-      if car {
-        art.car(c, cx: laneX, cy: vy, heading: 90, braking: pl.braking(p), trunk: pl.trunkOpen(p))
-      } else {
-        // speed lines behind the rider (he drives down, so "behind" = up)
-        c.saveGState()
-        c.setLineCap(.round)
-        c.setLineWidth(2.5 * d)
-        for k in -1...1 {
-          let sx = laneX - 1 * F(k) * 12 * d
-          for m in 0...1 {
-            let a = 80 * d + F(m) * 30 * d
-            c.setStrokeColor(UIColor.black.a(0.14 - F(m) * 0.05).cgColor)
-            c.move(to: CGPoint(x: sx, y: vy - a))
-            c.addLine(to: CGPoint(x: sx, y: vy - (a + 22 * d)))
-            c.strokePath()
-          }
-        }
-        c.restoreGState()
-        let wob = sin(p * 90) * 1.5 * d
-        art.bike(c, cx: laneX + wob, cy: vy, heading: 90, armOut: pl.throwPulse(p))
-      }
-    }
-  }
+    let vy = pl.yAt(p)
+    let active = p >= RIDE_START && p < pl.endT && vy < pl.y1 - 1 && (waited || vy > pl.y0 + 1)
+    armOut = pl.throwPulse(p, lag: lag, split: split)
+    brake = pl.braking(p)
+    trunk = pl.trunkOpen(p, lag: lag, split: split)
+    placeVehicle(vy: vy, visible: active)
+    if active && idleMs > 0 { showBubbles(vy: vy, ms: idleMs) } else { hideBubbles() }
 
-  private func drawStamp(_ c: CGContext, _ p: F, _ size: CGSize) {
-    let t = clamp01((p - 0.88) / 0.12)
-    let a = sin(F.pi * t)
-    if a <= 0.01 { return }
-    let text = "Delivered  ✓" as NSString
-    let attrs: [NSAttributedString.Key: Any] = [
-      .font: UIFont.boldSystemFont(ofSize: 15 * d),
-      .foregroundColor: UIColor.white.a(a),
-    ]
-    let ts = text.size(withAttributes: attrs)
-    let padX = 18 * d
-    let padY = 10 * d
-    let bw = ts.width + padX * 2
-    let bh = ts.height + padY * 2
-    let cx = size.width / 2
-    let bottom = size.height - 56 * d
-    let pill = CGRect(x: cx - bw / 2, y: bottom - bh, width: bw, height: bh)
-    c.saveGState()
-    let s = 0.9 + 0.1 * a
-    c.translateBy(x: cx, y: pill.midY)
-    c.scaleBy(x: s, y: s)
-    c.translateBy(x: -cx, y: -pill.midY)
-    c.setFillColor(Logo.navy.a(a).cgColor)
-    c.addPath(UIBezierPath(roundedRect: pill, cornerRadius: bh / 2).cgPath)
-    c.fillPath()
-    text.draw(at: CGPoint(x: pill.minX + padX, y: pill.minY + padY), withAttributes: attrs)
-    c.restoreGState()
+    // at the very end the complete real screen takes over
+    host.toContainer.opacity = Float(smoothStep((p - 0.93) / 0.07))
   }
 }
 

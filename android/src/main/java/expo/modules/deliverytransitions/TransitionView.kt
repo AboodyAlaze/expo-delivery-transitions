@@ -30,6 +30,12 @@ internal class TransitionView(context: Context) : View(context) {
   private var waitingT: Transition? = null
   private var waitAnimator: ValueAnimator? = null
   private var waitMs = 0L
+  private var holdAt = -1f
+  private var holding = false
+  private var released = false
+  private var pendingRefresh: Bitmap? = null
+  private var idleAnimator: ValueAnimator? = null
+  private val releaseRunnable = Runnable { release() }
 
   private val hintBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(102, 0, 0, 0) }
   private val hintText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -43,6 +49,17 @@ internal class TransitionView(context: Context) : View(context) {
     isClickable = true // swallow touches: nothing underneath can be tapped while the overlay is there
   }
 
+  /** Gives the two full-screen pictures back to the system right away (about 10 MB each on a modern phone). */
+  fun recycleBitmaps() {
+    val f = from
+    val t = to
+    from = null
+    to = null
+    pendingRefresh = null
+    if (f != null && !f.isRecycled) f.recycle()
+    if (t != null && !t.isRecycled) t.recycle()
+  }
+
   /** The frozen old screen (used to notice when the new one is really on screen). */
   fun frozen(): Bitmap? = from
 
@@ -53,9 +70,14 @@ internal class TransitionView(context: Context) : View(context) {
   }
 
   /** The new screen is not ready yet: let the transition start its waiting pre-roll (the vehicle arrives and waits). */
-  fun startWaiting(t: Transition, req: TransitionRequest) {
+  fun startWaiting(t: Transition, req: TransitionRequest, retries: Int = 20) {
     val f = from ?: return
-    if (width == 0 || height == 0 || !t.supportsWaiting) return
+    if (!t.supportsWaiting) return
+    if (width == 0 || height == 0) {
+      // the overlay has not been laid out yet (it was added a moment ago): try again next frame
+      if (retries > 0) postOnAnimation { startWaiting(t, req, retries - 1) }
+      return
+    }
     t.prepareWaiting(f, width.toFloat(), height.toFloat(), req)
     waitingT = t
     waitMs = 0L
@@ -68,6 +90,49 @@ internal class TransitionView(context: Context) : View(context) {
       }
       start()
     }
+  }
+
+  /** The data of a loading element arrived (fresh picture of the new screen). */
+  fun refresh(bitmap: Bitmap) {
+    if (transition == null) {
+      pendingRefresh = bitmap // the animation has not started yet: it starts with this picture
+      return
+    }
+    to = bitmap
+    released = true
+    if (holding) release()
+    invalidate()
+  }
+
+  private fun hold() {
+    holding = true
+    val t = transition ?: return
+    animator?.pause()
+    idleAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+      duration = 60_000L
+      interpolator = LinearInterpolator()
+      addUpdateListener {
+        t.idleMs = it.currentPlayTime.coerceAtLeast(1L)
+        invalidate()
+      }
+      start()
+    }
+    postDelayed(releaseRunnable, 3500L) // the data never came: go on anyway
+  }
+
+  private fun release() {
+    removeCallbacks(releaseRunnable)
+    if (!holding) return
+    holding = false
+    released = true
+    stopIdle()
+    animator?.resume()
+  }
+
+  private fun stopIdle() {
+    idleAnimator?.cancel()
+    idleAnimator = null
+    transition?.idleMs = 0L
   }
 
   private fun stopWaiting() {
@@ -83,7 +148,9 @@ internal class TransitionView(context: Context) : View(context) {
       return
     }
     stopWaiting()
-    to = toBitmap
+    released = pendingRefresh != null
+    to = pendingRefresh ?: toBitmap
+    pendingRefresh = null
     transition = t
     onFinished = finished
     done = false
@@ -91,11 +158,17 @@ internal class TransitionView(context: Context) : View(context) {
     val ms = if (req.durationMs > 0) req.durationMs else t.defaultMs
     val sp = t.startProgress
     progress = sp
+    holding = false
+    holdAt = if (released) -1f else t.holdProgress()
     animator = ValueAnimator.ofFloat(sp, 1f).apply {
       duration = (ms * (1f - sp)).toLong().coerceAtLeast(1L)
       interpolator = t.interpolator()
       addUpdateListener {
         progress = it.animatedValue as Float
+        if (holdAt >= 0f && !released && !holding && progress >= holdAt) {
+          progress = holdAt
+          hold() // the vehicle stands where the data is still loading
+        }
         invalidate()
       }
       addListener(object : AnimatorListenerAdapter() {
@@ -114,6 +187,8 @@ internal class TransitionView(context: Context) : View(context) {
   }
 
   fun cancelNow() {
+    removeCallbacks(releaseRunnable)
+    stopIdle()
     stopWaiting()
     animator?.cancel()
     finish()
@@ -122,6 +197,8 @@ internal class TransitionView(context: Context) : View(context) {
   private fun finish() {
     if (done) return
     done = true
+    removeCallbacks(releaseRunnable)
+    stopIdle()
     progress = 1f
     onFinished?.invoke()
   }
@@ -162,6 +239,8 @@ internal class TransitionView(context: Context) : View(context) {
 
   override fun onDetachedFromWindow() {
     super.onDetachedFromWindow()
+    removeCallbacks(releaseRunnable)
+    stopIdle()
     stopWaiting()
     animator?.cancel()
   }

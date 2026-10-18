@@ -20,6 +20,28 @@ public class DeliveryTransitionsModule: Module {
     }
     .runOnQueue(.main)
 
+    // optional: start the animation right away while the new screen is still rendering
+    Function("preroll") { (optionsJson: String) -> Void in
+      DispatchQueue.main.async {
+        TransitionController.shared.preroll(json: optionsJson)
+      }
+    }
+
+    // resolves when the NEW screen is really on screen (view tree / picture changed), or after the timeout
+    AsyncFunction("screenReady") { (timeoutMs: Int, promise: Promise) in
+      TransitionController.shared.waitForScreen(timeoutMs: timeoutMs) {
+        promise.resolve()
+      }
+    }
+    .runOnQueue(.main)
+
+    // the data of a loading element arrived: fresh picture of the new screen, the vehicle goes on
+    Function("refresh") { () -> Void in
+      DispatchQueue.main.async {
+        TransitionController.shared.refresh()
+      }
+    }
+
     Function("skip") { () -> Void in
       DispatchQueue.main.async {
         TransitionController.shared.skip()

@@ -6,8 +6,12 @@ export type NativeTransitions = {
   begin(): Promise<void>;
   /** The new screen is ready: animate. Resolves when the animation ends or is skipped. */
   play(optionsJson: string): Promise<void>;
-  /** Android only: start the animation right now (the vehicle arrives and waits) while the new screen renders. */
+  /** Start the animation right now (the vehicle arrives and waits) while the new screen renders. */
   preroll?(optionsJson: string): void;
+  /** Resolves when the NEW screen is really on screen (its view tree or picture changed), or after `timeoutMs`. */
+  screenReady?(timeoutMs: number): Promise<void>;
+  /** The data of a loading element arrived, take a fresh picture and let the vehicle go on. */
+  refresh?(): void;
   skip(): void;
   cancel(): void;
   isRunning(): boolean;

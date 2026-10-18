@@ -1,23 +1,45 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { Dimensions, View, type ViewProps } from 'react-native';
 
+import { notifyLoaded } from './loadingRefresh';
 import type { TransitionRect } from './types';
 
-const registry = new Map<number, RefObject<View | null>>();
+type Entry = { ref: RefObject<View | null>; loading: boolean };
+const registry = new Map<number, Entry>();
+
+/** True while any mounted target says its data is still loading. */
+export function anyTargetLoading(): boolean {
+  for (const entry of registry.values()) if (entry.loading) return true;
+  return false;
+}
 
 /**
- * Wrap up to 5 elements of the DESTINATION screen (header, cards...) with `<DeliveryTarget index={0..4}>`.
- * The delivery transitions then throw their parcels exactly at these elements and un-box them there.
+ * Wrap up to 5 elements of the DESTINATION screen (header, cards, list...) with `<DeliveryTarget index={0..4}>`.
+ * The delivery transitions throw their parcels exactly at these elements; the screen is cut into slices between them.
+ *
+ * `loading`: the element is still waiting for its data (fetch). The vehicle drives to it, STOPS there (with "?"
+ * bubbles) and goes on the moment `loading` becomes false, so a slow request never delays the start.
  * Without any target the screen is simply cut into 5 bands.
  */
-export function DeliveryTarget({ index, children, ...rest }: ViewProps & { index: number }) {
+export function DeliveryTarget({
+  index,
+  loading = false,
+  children,
+  ...rest
+}: ViewProps & { index: number; loading?: boolean }) {
   const ref = useRef<View>(null);
+  const entry = useRef<Entry>({ ref, loading });
   useEffect(() => {
-    registry.set(index, ref);
+    const mine = entry.current;
+    registry.set(index, mine);
     return () => {
-      if (registry.get(index) === ref) registry.delete(index);
+      if (registry.get(index) === mine) registry.delete(index);
     };
   }, [index]);
+  useEffect(() => {
+    entry.current.loading = loading;
+    if (!loading) notifyLoaded();
+  }, [loading]);
   return (
     <View ref={ref} collapsable={false} {...rest}>
       {children}
@@ -63,7 +85,7 @@ export async function measureTargets(): Promise<TransitionRect[]> {
   const entries = [...registry.entries()].sort((a, b) => a[0] - b[0]);
   const rects = await Promise.all(
     entries.map(
-      ([, ref]) =>
+      ([, { ref, loading }]) =>
         new Promise<TransitionRect | null>((resolve) => {
           const view = ref.current;
           if (!view) {
@@ -71,7 +93,7 @@ export async function measureTargets(): Promise<TransitionRect[]> {
             return;
           }
           view.measureInWindow((x, y, width, height) =>
-            resolve(width > 0 && height > 0 ? { x, y, width, height } : null)
+            resolve(width > 0 && height > 0 ? { x, y, width, height, loading } : null)
           );
         })
     )
