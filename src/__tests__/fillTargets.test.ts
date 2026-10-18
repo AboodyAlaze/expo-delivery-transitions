@@ -1,4 +1,4 @@
-import { fillTargets } from '../DeliveryTarget';
+import { clipTargets, fillTargets } from '../DeliveryTarget';
 
 const r = (y: number, height: number) => ({ x: 0, y, width: 300, height });
 
@@ -22,5 +22,12 @@ describe('fillTargets', () => {
     const out = fillTargets([r(100, 400)]);
     expect(out).toHaveLength(5);
     expect(out.reduce((sum, o) => sum + o.height, 0)).toBe(400);
+  });
+});
+
+describe('clipTargets', () => {
+  it('keeps the on-screen part of a long list and drops what is off screen or tiny', () => {
+    const out = clipTargets([r(300, 2000), r(-40, 80), r(900, 10), r(2500, 100)], 800);
+    expect(out).toEqual([r(0, 40), r(300, 500)]);
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
-import { View, type ViewProps } from 'react-native';
+import { Dimensions, View, type ViewProps } from 'react-native';
 
 import type { TransitionRect } from './types';
 
@@ -23,6 +23,22 @@ export function DeliveryTarget({ index, children, ...rest }: ViewProps & { index
       {children}
     </View>
   );
+}
+
+/** Keeps only the part of every element that is on screen (a long list is taller than the screen), top to bottom. */
+export function clipTargets(
+  rects: TransitionRect[],
+  screenHeight: number,
+  minSize = 24
+): TransitionRect[] {
+  return rects
+    .map((r) => {
+      const top = Math.max(0, r.y);
+      const bottom = Math.min(screenHeight, r.y + r.height);
+      return { ...r, y: top, height: bottom - top };
+    })
+    .filter((r) => r.height >= minSize && r.width >= minSize)
+    .sort((a, b) => a.y - b.y);
 }
 
 /**
@@ -60,5 +76,9 @@ export async function measureTargets(): Promise<TransitionRect[]> {
         })
     )
   );
-  return fillTargets(rects.filter((r): r is TransitionRect => r !== null));
+  const onScreen = clipTargets(
+    rects.filter((r): r is TransitionRect => r !== null),
+    Dimensions.get('window').height
+  );
+  return fillTargets(onScreen);
 }

@@ -1,4 +1,4 @@
-import { processColor, type GestureResponderEvent } from 'react-native';
+import { Platform, processColor, type GestureResponderEvent } from 'react-native';
 
 import { measureTargets } from './DeliveryTarget';
 import { Native } from './NativeTransitions';
@@ -84,7 +84,7 @@ export async function runTransition(
     try {
       await nextFrame();
       await nextFrame();
-      await wait(options.settleMs ?? 120);
+      await wait(options.settleMs ?? (Platform.OS === 'android' ? 30 : 120));
       mark('new screen rendered');
 
       const ready = await readiness.waitUntilReady(options.readyTimeoutMs ?? 1500);

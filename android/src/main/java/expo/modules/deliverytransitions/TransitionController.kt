@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.RectF
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -69,7 +70,11 @@ internal object TransitionController {
     view.startWaiting(t, req)
   }
 
-  /** Step 2: the new screen is ready, play. [onDone] is called exactly once, when the animation ends or is skipped. */
+  /**
+   * Step 2: the new screen is rendered, play. [onDone] is called exactly once, when the animation ends or is skipped.
+   * If the screenshot still equals the frozen old screen (the new one is not on screen yet) it is retaken a few
+   * milliseconds later, so the animation never starts on a stale picture.
+   */
   fun play(activity: Activity, json: String, onDone: () -> Unit) {
     val view = overlay
     val root = rnRoot
@@ -77,20 +82,44 @@ internal object TransitionController {
       onDone()
       return
     }
-    val d = activity.resources.displayMetrics.density
-    val req = parse(json, d)
+    val req = parse(json, activity.resources.displayMetrics.density)
+    pendingDone = onDone
+    attempt(activity, view, root, req, SystemClock.uptimeMillis())
+  }
+
+  private fun attempt(activity: Activity, view: TransitionView, root: View, req: TransitionRequest, t0: Long) {
+    if (!isRunning || overlay !== view) return
     val toBmp = capture(activity, root)
     if (toBmp == null) {
-      finish()
-      onDone()
+      finish() // also reports "done" to JavaScript
       return
     }
-    pendingDone = onDone
+    val old = view.frozen()
+    val stale = old != null && sameScreen(old, toBmp)
+    if (stale && SystemClock.uptimeMillis() - t0 < 700L) {
+      armWatchdog(4000L)
+      main.postDelayed({ attempt(activity, view, root, req, t0) }, 24L)
+      return
+    }
     val waiting = waitingTransition
     val t = if (waiting != null && waitingName == req.name) waiting else createTransition(req.name)
     val ms = if (req.durationMs > 0) req.durationMs else t.defaultMs
     armWatchdog(ms + 2500L)
     view.play(toBmp, t, req) { finish() }
+  }
+
+  /** Cheap check (800 sample points): do the two screenshots show the same screen? */
+  private fun sameScreen(a: Bitmap, b: Bitmap): Boolean {
+    if (a.width != b.width || a.height != b.height) return false
+    var different = 0
+    for (iy in 1..40) {
+      val y = (a.height * iy / 41).coerceIn(0, a.height - 1)
+      for (ix in 1..20) {
+        val x = (a.width * ix / 21).coerceIn(0, a.width - 1)
+        if (a.getPixel(x, y) != b.getPixel(x, y) && ++different >= 8) return false
+      }
+    }
+    return true
   }
 
   /** Jump to the end of the running transition. */

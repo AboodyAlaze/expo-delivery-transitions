@@ -43,6 +43,9 @@ internal class TransitionView(context: Context) : View(context) {
     isClickable = true // swallow touches: nothing underneath can be tapped while the overlay is there
   }
 
+  /** The frozen old screen (used to notice when the new one is really on screen). */
+  fun frozen(): Bitmap? = from
+
   /** The old screen, frozen. */
   fun freeze(bitmap: Bitmap) {
     from = bitmap
@@ -137,7 +140,7 @@ internal class TransitionView(context: Context) : View(context) {
       return
     }
     t.draw(canvas, f, b, progress, width.toFloat(), height.toFloat())
-    if (t !is FadeTransition) drawHint(canvas)
+    if (t !is FadeTransition && t !is DeliveryTransition) drawHint(canvas)
   }
 
   private fun drawHint(c: Canvas) {

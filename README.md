@@ -154,28 +154,36 @@ so edits to `src/` show up instantly. It also has a plain `<Link>` screen, to se
 
 MIT
 
-## Slow or data-driven screens
+## Speed and layout (delivery transitions)
 
-**The animation starts immediately (Android).** For `deliveryBike` / `deliveryCar` the vehicle starts driving as soon as the
-tap happens and waits at the top, looking around, while the new screen renders. When the screen is ready it continues
-with the delivery. Nothing to configure.
-
-**Wait for your data: `useTransitionReady`.** By default the new screen is photographed right after it renders, which can
-be a half-loaded skeleton. Tell the transition when the screen shows what the user should see:
+- **Fast:** the bike takes about 1.2 s and the car 1.4 s (you can change it with `durationMs`).
+- **Starts at once (Android):** the vehicle slides in the moment the user taps, while the new screen renders. The old
+  screen stays untouched until the new one is really on screen (the module checks that natively, no guessing).
+- **No gaps, no lines:** the new screen is cut into full-width slices that together cover the whole screen. Their
+  boundaries come from your `<DeliveryTarget>` elements (halfway between two neighbours); every slice opens where its
+  parcel lands. With no targets the screen is cut into 5 equal slices.
 
 ```tsx
-import { useTransitionReady } from 'expo-delivery-transitions';
-
-const { isLoading } = useFetch(/* ... */);
-useTransitionReady(!isLoading);
+<DeliveryTarget index={0}><Header /></DeliveryTarget>
+<DeliveryTarget index={1}><Stats /></DeliveryTarget>
+<DeliveryTarget index={2}><Button /></DeliveryTarget>
+<DeliveryTarget index={3}><List /></DeliveryTarget> {/* a long list: only the part on screen is used */}
 ```
 
-The wait is capped by `readyTimeoutMs` (default 1500). Screens that never call the hook are never waited for.
+Fewer than 5 targets are fine: the tallest ones are split until there are 5. Elements taller than the screen are clipped
+to the screen.
 
-**Find what is slow: `debug`.**
+**Tip:** avoid entering animations (for example Reanimated `FadeIn` with a delay) on the first screen content. The new
+screen is photographed right after it renders, so content that is still invisible at that moment is missing in the picture.
+
+## Optional
+
+**`useTransitionReady(ready)`** makes the transition wait (at most `readyTimeoutMs`, default 1500) until the new screen
+says it is ready. It is SLOWER on purpose: use it only if you prefer a finished picture over speed.
+
+**`debug: true`** prints the time of every phase:
 
 ```tsx
 router.push('/details', { name: 'deliveryBike', debug: true });
 // [expo-delivery-transitions] screen frozen: +25 ms (total 25 ms)
-// [expo-delivery-transitions] new screen rendered: +2310 ms (total 2340 ms)
 ```
