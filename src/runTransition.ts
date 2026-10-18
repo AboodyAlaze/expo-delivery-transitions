@@ -2,6 +2,7 @@ import { processColor, type GestureResponderEvent } from 'react-native';
 
 import { measureTargets } from './DeliveryTarget';
 import { Native } from './NativeTransitions';
+import { startReadinessRun } from './transitionReady';
 import type { TransitionOptions } from './types';
 
 let running = false;
@@ -44,9 +45,29 @@ export async function runTransition(
   }
   if (running) return; // a transition is already playing: ignore a second tap instead of navigating twice
   running = true;
+  const t0 = Date.now();
+  let last = t0;
+  const mark = (label: string) => {
+    if (!options.debug) return;
+    const now = Date.now();
+    console.log(`[expo-delivery-transitions] ${label}: +${now - last} ms (total ${now - t0} ms)`);
+    last = now;
+  };
+  const readiness = startReadinessRun();
   try {
+    const name = options.name ?? 'fade';
+    const accent = processColor(options.accent ?? '#7C5CFF');
     try {
       await Native.begin();
+      mark('screen frozen');
+      try {
+        // Android: the vehicle starts driving NOW and waits, instead of the screen looking frozen while React renders
+        Native.preroll?.(
+          JSON.stringify({ name, accent: typeof accent === 'number' ? accent : 0xff7c5cff })
+        );
+      } catch {
+        // not available: the animation simply starts when the new screen is ready
+      }
     } catch {
       await navigate(); // could not freeze the screen: navigate normally
       return;
@@ -54,6 +75,7 @@ export async function runTransition(
 
     try {
       await navigate();
+      mark('navigate() returned');
     } catch (error) {
       Native.cancel();
       throw error;
@@ -63,11 +85,14 @@ export async function runTransition(
       await nextFrame();
       await nextFrame();
       await wait(options.settleMs ?? 120);
+      mark('new screen rendered');
 
-      const name = options.name ?? 'fade';
+      const ready = await readiness.waitUntilReady(options.readyTimeoutMs ?? 1500);
+      mark(ready ? 'new screen ready' : 'ready timeout (played anyway)');
+
       const wantsTargets = name === 'deliveryBike' || name === 'deliveryCar';
       const targets = options.targets ?? (wantsTargets ? await measureTargets() : []);
-      const accent = processColor(options.accent ?? '#7C5CFF');
+      mark(`targets measured (${targets.length})`);
 
       await Native.play(
         JSON.stringify({
@@ -79,10 +104,12 @@ export async function runTransition(
           targets,
         })
       );
+      mark('animation finished');
     } catch {
       Native.cancel(); // the screen is already the new one; just remove the overlay
     }
   } finally {
+    readiness.end();
     running = false;
   }
 }

@@ -29,8 +29,7 @@
     },
     "ios": {
       "bundleIdentifier": "com.aboody.deliverytransitions",
-      "supportsTablet": true,
-      "appleTeamId": "28WN5DTH9W"
+      "supportsTablet": true
     }
   }
 }

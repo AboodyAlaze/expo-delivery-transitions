@@ -26,4 +26,11 @@ export type TransitionOptions = {
   targets?: TransitionRect[];
   /** Time to wait for the new screen to render before it is photographed. Default 120 ms. */
   settleMs?: number;
+  /**
+   * Max time (ms) to wait for the NEW screen to say it is ready (see `useTransitionReady`). Default 1500.
+   * Only matters for screens that call `useTransitionReady`; other screens are never waited for.
+   */
+  readyTimeoutMs?: number;
+  /** Prints the time of every phase (freeze / navigate / render / ready / measure / animation) in the console. */
+  debug?: boolean;
 };

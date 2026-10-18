@@ -37,6 +37,17 @@ internal abstract class Transition {
   open fun prepare(from: Bitmap, to: Bitmap, w: Float, h: Float, req: TransitionRequest) {}
   abstract fun draw(c: Canvas, from: Bitmap, to: Bitmap, p: Float, w: Float, h: Float)
 
+  /**
+   * "Waiting" pre-roll (delivery only): the animation can START before the new screen is ready (the vehicle arrives and
+   * waits), so a slow screen never looks like a frozen app. When the new screen is ready the same instance continues.
+   */
+  open val supportsWaiting: Boolean get() = false
+  open fun prepareWaiting(from: Bitmap, w: Float, h: Float, req: TransitionRequest) {}
+  open fun drawWaiting(c: Canvas, from: Bitmap, ms: Long, w: Float, h: Float) {}
+
+  /** Where the timeline starts (a transition that already played its first part while waiting skips it). */
+  open val startProgress: Float get() = 0f
+
   protected val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
   private var shader: BitmapShader? = null
   private var shaderBitmap: Bitmap? = null

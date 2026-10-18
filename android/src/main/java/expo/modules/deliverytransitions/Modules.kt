@@ -47,6 +47,17 @@ class DeliveryTransitionsModule : Module() {
       }
     }
 
+    // optional: start the animation right away while the new screen is still rendering (Android)
+    Function("preroll") { optionsJson: String ->
+      val activity = appContext.currentActivity
+      activity?.runOnUiThread {
+        try {
+          TransitionController.preroll(activity, optionsJson)
+        } catch (_: Throwable) {
+        }
+      }
+    }
+
     Function("skip") { -> TransitionController.skip() }
     Function("cancel") { -> TransitionController.cancel() }
     Function("isRunning") { -> TransitionController.isRunning }

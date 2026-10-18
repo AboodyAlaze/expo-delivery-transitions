@@ -12,6 +12,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.LinearInterpolator
 
 /**
  * The full-screen overlay. A plain Android View (no Compose): it shows the frozen OLD screen, and later plays a
@@ -26,6 +27,9 @@ internal class TransitionView(context: Context) : View(context) {
   private var animator: ValueAnimator? = null
   private var onFinished: (() -> Unit)? = null
   private var done = false
+  private var waitingT: Transition? = null
+  private var waitAnimator: ValueAnimator? = null
+  private var waitMs = 0L
 
   private val hintBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(102, 0, 0, 0) }
   private val hintText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -45,20 +49,47 @@ internal class TransitionView(context: Context) : View(context) {
     invalidate()
   }
 
+  /** The new screen is not ready yet: let the transition start its waiting pre-roll (the vehicle arrives and waits). */
+  fun startWaiting(t: Transition, req: TransitionRequest) {
+    val f = from ?: return
+    if (width == 0 || height == 0 || !t.supportsWaiting) return
+    t.prepareWaiting(f, width.toFloat(), height.toFloat(), req)
+    waitingT = t
+    waitMs = 0L
+    waitAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+      duration = 60_000L
+      interpolator = LinearInterpolator()
+      addUpdateListener {
+        waitMs = it.currentPlayTime
+        invalidate()
+      }
+      start()
+    }
+  }
+
+  private fun stopWaiting() {
+    waitAnimator?.cancel()
+    waitAnimator = null
+    waitingT = null
+  }
+
   fun play(toBitmap: Bitmap, t: Transition, req: TransitionRequest, finished: () -> Unit) {
     val fromBitmap = from
     if (fromBitmap == null || width == 0 || height == 0) {
       finished()
       return
     }
+    stopWaiting()
     to = toBitmap
     transition = t
     onFinished = finished
     done = false
     t.prepare(fromBitmap, toBitmap, width.toFloat(), height.toFloat(), req)
     val ms = if (req.durationMs > 0) req.durationMs else t.defaultMs
-    animator = ValueAnimator.ofFloat(0f, 1f).apply {
-      duration = ms.toLong()
+    val sp = t.startProgress
+    progress = sp
+    animator = ValueAnimator.ofFloat(sp, 1f).apply {
+      duration = (ms * (1f - sp)).toLong().coerceAtLeast(1L)
       interpolator = t.interpolator()
       addUpdateListener {
         progress = it.animatedValue as Float
@@ -80,6 +111,7 @@ internal class TransitionView(context: Context) : View(context) {
   }
 
   fun cancelNow() {
+    stopWaiting()
     animator?.cancel()
     finish()
   }
@@ -95,6 +127,11 @@ internal class TransitionView(context: Context) : View(context) {
     val f = from ?: return
     val t = transition
     val b = to
+    val wt = waitingT
+    if (t == null && wt != null) {
+      wt.drawWaiting(canvas, f, waitMs, width.toFloat(), height.toFloat())
+      return
+    }
     if (t == null || b == null) {
       canvas.drawBitmap(f, 0f, 0f, null)
       return
@@ -122,6 +159,7 @@ internal class TransitionView(context: Context) : View(context) {
 
   override fun onDetachedFromWindow() {
     super.onDetachedFromWindow()
+    stopWaiting()
     animator?.cancel()
   }
 }

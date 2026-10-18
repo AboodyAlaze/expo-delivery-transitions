@@ -31,6 +31,8 @@ internal object TransitionController {
   private var overlay: TransitionView? = null
   private var pendingDone: (() -> Unit)? = null
   private var watchdog: Runnable? = null
+  private var waitingTransition: Transition? = null
+  private var waitingName: String? = null
 
   @Volatile
   var isRunning: Boolean = false
@@ -55,6 +57,18 @@ internal object TransitionController {
     armWatchdog(8000L) // nothing can keep the app blocked for ever
   }
 
+  /** Optional, right after begin(): the animation starts NOW (vehicle arrives and waits) while JavaScript renders. */
+  fun preroll(activity: Activity, json: String) {
+    val view = overlay ?: return
+    if (!isRunning) return
+    val req = parse(json, activity.resources.displayMetrics.density)
+    val t = createTransition(req.name)
+    if (!t.supportsWaiting) return
+    waitingTransition = t
+    waitingName = req.name
+    view.startWaiting(t, req)
+  }
+
   /** Step 2: the new screen is ready, play. [onDone] is called exactly once, when the animation ends or is skipped. */
   fun play(activity: Activity, json: String, onDone: () -> Unit) {
     val view = overlay
@@ -72,7 +86,8 @@ internal object TransitionController {
       return
     }
     pendingDone = onDone
-    val t = createTransition(req.name)
+    val waiting = waitingTransition
+    val t = if (waiting != null && waitingName == req.name) waiting else createTransition(req.name)
     val ms = if (req.durationMs > 0) req.durationMs else t.defaultMs
     armWatchdog(ms + 2500L)
     view.play(toBmp, t, req) { finish() }
@@ -102,6 +117,8 @@ internal object TransitionController {
     val done = pendingDone
     overlay = null
     pendingDone = null
+    waitingTransition = null
+    waitingName = null
     host = null
     rnRoot = null
     isRunning = false

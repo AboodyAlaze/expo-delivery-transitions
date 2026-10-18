@@ -5,6 +5,7 @@ export {
   originFromEvent,
 } from './runTransition';
 export { DeliveryTarget } from './DeliveryTarget';
+export { useTransitionReady } from './transitionReady';
 export {
   useTransitionRouter,
   useTransitionBackHandler,

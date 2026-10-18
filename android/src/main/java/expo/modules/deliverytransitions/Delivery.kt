@@ -112,16 +112,79 @@ internal class DeliveryTransition(private val car: Boolean) : Transition() {
   private val src = Rect()
   private val tmp = RectF()
 
+  // ---- waiting pre-roll: the vehicle arrives and waits while the new screen is still rendering ----
+  override val supportsWaiting: Boolean get() = true
+  private var waited = false
+  private var holdY = 0f
+  private var roadTop = 0f
+  private var lastVy = 0f
+  private var lastE = 0f
+  private var lastLook = 0f
+  private var lastHazard = 0f
+  override val startProgress: Float get() = if (waited) RIDE_START else 0f
+
+  override fun prepareWaiting(from: Bitmap, w: Float, h: Float, req: TransitionRequest) {
+    d = req.density
+    art = VehicleArt(d)
+    accent = req.accent
+    laneX = (if (car) 52f else 40f) * d
+    roadTop = -90f * d
+    holdY = 64f * d
+    lastVy = roadTop
+    bg = if (from.width > 4 && from.height > 4) from.getPixel(2, 2) else Color.BLACK
+    waited = true
+  }
+
+  override fun drawWaiting(c: Canvas, from: Bitmap, ms: Long, w: Float, h: Float) {
+    c.drawColor(bg)
+
+    // the old screen steps aside (same look as the real transition)
+    val e = smoothStep(ms / 450f)
+    lastE = e
+    if (e < 1f) {
+      val s = 1f - 0.08f * e
+      c.save()
+      c.scale(s, s, w / 2f, h / 2f)
+      paint.alpha = ((1f - e) * 255f).toInt()
+      c.drawBitmap(from, 0f, 0f, paint)
+      c.restore()
+      paint.alpha = 255
+    }
+
+    // the vehicle arrives from the top and waits there, looking around
+    val arrive = easeOutCubic((ms - 150f) / 650f)
+    val vy = lf(roadTop, holdY, arrive)
+    lastVy = vy
+    if (vy > roadTop + 1f) {
+      if (car) {
+        paint.style = Paint.Style.FILL
+        paint.color = Color.BLACK.withAlpha(0.05f)
+        c.drawRect(laneX - 40f * d, roadTop, laneX + 40f * d, vy, paint)
+      }
+      line.color = Color.BLACK.withAlpha(0.13f)
+      line.strokeWidth = 3f * d
+      line.strokeCap = Paint.Cap.BUTT
+      c.drawLine(laneX, roadTop, laneX, vy, line)
+      val idle = smoothStep((ms - 800f) / 300f)
+      lastLook = idle * 35f * sin((ms - 800f) / 380f)
+      lastHazard = if (car) idle * (0.5f + 0.5f * sin(ms / 140f)) else 0f
+      if (car) art.car(c, laneX, vy, 90f, 0f, 0f, 1f, lastHazard)
+      else art.bike(c, laneX, vy, 90f, 0f, 1f, lastLook)
+    }
+  }
+
   override fun prepare(from: Bitmap, to: Bitmap, w: Float, h: Float, req: TransitionRequest) {
     d = req.density
     art = VehicleArt(d)
     accent = req.accent
     bg = if (to.width > 4 && to.height > 4) to.getPixel(2, 2) else Color.WHITE
     rects = if (req.targets.size >= BLOCKS) req.targets.take(BLOCKS) else fallbackTargets(w, h)
-    val y0 = -90f * d
     val y1 = h + 90f * d
     val lead = (if (car) 40f else 46f) * d
     laneX = (if (car) 52f else 40f) * d
+    roadTop = -90f * d
+    // continue from where the vehicle is waiting (never below the first stop, or it would have to drive backwards)
+    val y0 = if (waited) minOf(lastVy, rects[0].centerY() - lead - 8f * d) else roadTop
     plan = Plan(FloatArray(BLOCKS) { rects[it].centerY() }, car, y0, y1, lead)
     line.pathEffect = DashPathEffect(floatArrayOf(14f * d, 12f * d), 0f)
     stamp.typeface = Typeface.DEFAULT_BOLD
@@ -144,7 +207,7 @@ internal class DeliveryTransition(private val car: Boolean) : Transition() {
     c.drawColor(bg)
 
     // the old screen steps aside
-    val e = smoothStep(p / 0.22f)
+    val e = if (waited) lf(lastE, 1f, smoothStep((p - RIDE_START) / 0.10f)) else smoothStep(p / 0.22f)
     if (e < 1f) {
       val s = 1f - 0.08f * e
       c.save()
@@ -188,18 +251,23 @@ internal class DeliveryTransition(private val car: Boolean) : Transition() {
 
   private fun drawOverlay(c: Canvas, pl: Plan, p: Float) {
     val vy = pl.yAt(p)
-    val active = p > RIDE_START && p < pl.endT && vy > pl.y0 + 1f && vy < pl.y1 - 1f
+    val active =
+      if (waited) p >= RIDE_START && p < pl.endT && vy < pl.y1 - 1f
+      else p > RIDE_START && p < pl.endT && vy > pl.y0 + 1f && vy < pl.y1 - 1f
+    // what was already playing while we waited fades into the normal drive
+    val ramp = if (waited) smoothStep((p - RIDE_START) / 0.05f) else 1f
+    val carry = if (waited) 1f - smoothStep((p - RIDE_START) / 0.05f) else 0f
 
     // the road behind the vehicle
     if (active) {
       if (car) {
         paint.style = Paint.Style.FILL
         paint.color = Color.BLACK.withAlpha(0.05f)
-        c.drawRect(laneX - 40f * d, pl.y0, laneX + 40f * d, vy, paint)
+        c.drawRect(laneX - 40f * d, roadTop, laneX + 40f * d, vy, paint)
       }
       line.color = Color.BLACK.withAlpha(0.13f)
       line.strokeWidth = 3f * d
-      c.drawLine(laneX, pl.y0, laneX, vy, line)
+      c.drawLine(laneX, roadTop, laneX, vy, line)
     }
 
     // parcels in the air
@@ -224,7 +292,7 @@ internal class DeliveryTransition(private val car: Boolean) : Transition() {
     // the vehicle
     if (active) {
       if (car) {
-        art.car(c, laneX, vy, 90f, pl.braking(p), pl.trunkOpen(p))
+        art.car(c, laneX, vy, 90f, pl.braking(p), pl.trunkOpen(p), 1f, lastHazard * carry)
       } else {
         val rad = Math.toRadians(90.0)
         val dx = cos(rad).toFloat()
@@ -236,13 +304,13 @@ internal class DeliveryTransition(private val car: Boolean) : Transition() {
           val sy = vy + dx * k * 12f * d
           for (m in 0..1) {
             val a = 80f * d + m * 30f * d
-            line.color = Color.BLACK.withAlpha(0.14f - m * 0.05f)
+            line.color = Color.BLACK.withAlpha((0.14f - m * 0.05f) * ramp)
             c.drawLine(sx - dx * a, sy - dy * a, sx - dx * (a + 22f * d), sy - dy * (a + 22f * d), line)
           }
         }
         line.strokeCap = Paint.Cap.BUTT
         val wob = sin(p * 90f) * 1.5f * d
-        art.bike(c, laneX + wob, vy, 90f, pl.throwPulse(p))
+        art.bike(c, laneX + wob, vy, 90f, pl.throwPulse(p), 1f, lastLook * carry)
       }
     }
   }

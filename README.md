@@ -153,3 +153,29 @@ so edits to `src/` show up instantly. It also has a plain `<Link>` screen, to se
 ## License
 
 MIT
+
+## Slow or data-driven screens
+
+**The animation starts immediately (Android).** For `deliveryBike` / `deliveryCar` the vehicle starts driving as soon as the
+tap happens and waits at the top, looking around, while the new screen renders. When the screen is ready it continues
+with the delivery. Nothing to configure.
+
+**Wait for your data: `useTransitionReady`.** By default the new screen is photographed right after it renders, which can
+be a half-loaded skeleton. Tell the transition when the screen shows what the user should see:
+
+```tsx
+import { useTransitionReady } from 'expo-delivery-transitions';
+
+const { isLoading } = useFetch(/* ... */);
+useTransitionReady(!isLoading);
+```
+
+The wait is capped by `readyTimeoutMs` (default 1500). Screens that never call the hook are never waited for.
+
+**Find what is slow: `debug`.**
+
+```tsx
+router.push('/details', { name: 'deliveryBike', debug: true });
+// [expo-delivery-transitions] screen frozen: +25 ms (total 25 ms)
+// [expo-delivery-transitions] new screen rendered: +2310 ms (total 2340 ms)
+```
