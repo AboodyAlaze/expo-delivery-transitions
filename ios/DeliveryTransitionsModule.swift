@@ -29,8 +29,8 @@ public class DeliveryTransitionsModule: Module {
 
     // resolves when the NEW screen is really on screen (view tree / picture changed), or after the timeout
     AsyncFunction("screenReady") { (timeoutMs: Int, promise: Promise) in
-      TransitionController.shared.waitForScreen(timeoutMs: timeoutMs) {
-        promise.resolve()
+      TransitionController.shared.waitForScreen(timeoutMs: timeoutMs) { ready in
+        promise.resolve(ready)
       }
     }
     .runOnQueue(.main)

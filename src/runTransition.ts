@@ -99,7 +99,16 @@ export async function runTransition(
       if (typeof native.screenReady === 'function') {
         // the native side watches the real screen (cheaply) and answers when the new one is on screen
         // delivery: the screen may be slow to render (up to 3 s); other transitions (a quick fade back) never wait long
-        await native.screenReady(options.screenTimeoutMs ?? (wantsTargets ? 3000 : 700));
+        const shown = await native.screenReady(
+          options.screenTimeoutMs ?? (wantsTargets ? 3000 : 700)
+        );
+        if (shown === false) {
+          // the new screen never showed up in the picture: do NOT animate a stale picture (it would show the old
+          // screen again). The real screen is there anyway: just remove the overlay.
+          mark('new screen not detected: no animation');
+          native.cancel();
+          return;
+        }
         await nextFrame(); // let the new screen register its <DeliveryTarget>s
       } else {
         await nextFrame();

@@ -77,40 +77,51 @@ internal object TransitionController {
   }
 
   /**
-   * Calls [done] when the NEW screen is really on screen: its view tree has many more (or fewer) views than the old
-   * screen, or the tiny picture of the screen is clearly another screen. A pressed button or a fading tab bar is not
-   * enough. Two frames later (so it is laid out), or after [timeoutMs], whichever comes first.
-   * Cheap on purpose: counting views costs about a millisecond and the tiny picture is taken only every 100 ms, so this
-   * never competes with the work that is mounting the new screen.
+   * Calls [done] with `true` when the NEW screen is really on screen, with `false` if it never showed up in [timeoutMs].
+   *
+   * What counts is what is DRAWN: a tiny grey picture of the screen (45 x 100) must be clearly another screen than
+   * the frozen one. A changed view tree alone is NOT enough (the new screen's views can be attached while the old
+   * screen is still what is drawn: that is how the old screen ended up inside the slices). Only a screen that looks
+   * almost the same as the old one is accepted by its view tree, 700 ms after the tree changed.
+   *
+   * Cheap on purpose: counting views costs about 1 ms; the picture is taken every 250 ms, and every 60 ms once the
+   * view tree has changed (the new screen is about to appear). Slower screens are probed less often, so the watching
+   * never competes with the work that mounts the new screen.
    */
-  fun waitForScreen(activity: Activity, timeoutMs: Int, done: () -> Unit) {
+  fun waitForScreen(activity: Activity, timeoutMs: Int, done: (Boolean) -> Unit) {
     val view = overlay
     val root = rnRoot
     if (!isRunning || view == null || root == null) {
-      done()
+      done(false)
       return
     }
     armWatchdog(timeoutMs + 5000L)
     val t0 = SystemClock.uptimeMillis()
-    var nextProbeAt = t0 + 200L // the view count catches almost every screen; the picture is only the second opinion
+    var nextProbeAt = t0 + 200L
+    var treeChangedAt = -1L
     val step = object : Runnable {
       override fun run() {
         if (!isRunning || overlay !== view) {
-          done()
+          done(false)
           return
         }
         val now = SystemClock.uptimeMillis()
-        var changed = Math.abs(countViews(root) - fromCount) >= 25
-        if (!changed && now >= nextProbeAt) {
-          val s = SystemClock.uptimeMillis()
-          changed = meanDiff(probe(activity, root), fromProbe) >= 6.0
-          // never let the watching cost the app more than about 4% of one core: slow screens are probed less often
-          nextProbeAt = SystemClock.uptimeMillis() + maxOf(250L, (SystemClock.uptimeMillis() - s) * 25L)
+        if (treeChangedAt < 0 && Math.abs(countViews(root) - fromCount) >= 25) {
+          treeChangedAt = now
+          nextProbeAt = now // the new screen is about to appear: look at the picture right now
         }
-        if (changed || now - t0 >= timeoutMs) {
-          main.postDelayed({ done() }, 17L) // one frame: the new views are laid out
-        } else {
-          main.postDelayed(this, 33L)
+        var verified = false
+        if (now >= nextProbeAt) {
+          val s = SystemClock.uptimeMillis()
+          verified = meanDiff(probe(activity, root), fromProbe) >= 6.0
+          val cost = SystemClock.uptimeMillis() - s
+          nextProbeAt = SystemClock.uptimeMillis() + maxOf(if (treeChangedAt >= 0) 60L else 250L, cost * 8L)
+        }
+        val similarScreen = treeChangedAt >= 0 && now - treeChangedAt >= 700L
+        when {
+          verified || similarScreen -> main.postDelayed({ done(true) }, 17L) // one frame: laid out
+          now - t0 >= timeoutMs -> done(false)
+          else -> main.postDelayed(this, 33L)
         }
       }
     }

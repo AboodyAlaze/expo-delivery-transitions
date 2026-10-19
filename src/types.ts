@@ -6,6 +6,7 @@ export type TransitionName =
   | 'radarSweep'
   | 'hexAperture'
   | 'curtainDrop'
+  | 'dismiss'
   | 'fade';
 
 export type TransitionRect = {
@@ -18,7 +19,7 @@ export type TransitionRect = {
 };
 
 export type TransitionOptions = {
-  /** Which animation. Default: 'fade'. */
+  /** Which animation. Default: 'fade'. (`back`, `dismiss` and `dismissAll` use 'dismiss'.) */
   name?: TransitionName;
   /** Where the user touched, in dp (see `originFromEvent`). Radar / hex / ball zoom start exactly there. */
   origin?: { x: number; y: number };

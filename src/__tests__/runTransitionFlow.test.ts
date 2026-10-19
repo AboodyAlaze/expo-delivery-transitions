@@ -14,7 +14,7 @@ function resetFake(overrides: Record<string, unknown> = {}) {
     });
   fake.begin = mk('begin', () => Promise.resolve());
   fake.preroll = mk('preroll');
-  fake.screenReady = mk('screenReady', () => Promise.resolve());
+  fake.screenReady = mk('screenReady', () => Promise.resolve(true));
   fake.play = mk('play', () => Promise.resolve());
   fake.refresh = mk('refresh');
   fake.skip = mk('skip');
@@ -95,6 +95,22 @@ describe('runTransition (with a native module)', () => {
     release();
     await p;
     expect(first).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT animate a stale picture when the new screen was never detected', async () => {
+    resetFake({ screenReady: jest.fn(() => Promise.resolve(false)) });
+    const navigate = jest.fn();
+    await runTransition({ name: 'deliveryBike' }, navigate);
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(fake.play).not.toHaveBeenCalled();
+    expect(fake.cancel).toHaveBeenCalled();
+    expect(isTransitionRunning()).toBe(false);
+  });
+
+  it('accepts an older native build whose screenReady answers nothing', async () => {
+    resetFake({ screenReady: jest.fn(() => Promise.resolve()) });
+    await runTransition({ name: 'deliveryBike' }, () => {});
+    expect(fake.play).toHaveBeenCalledTimes(1);
   });
 
   it('works with an older native build that has no screenReady / preroll', async () => {

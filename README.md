@@ -74,20 +74,20 @@ import {
 // 3) the router: same API as useRouter(), push / navigate / replace / dismissTo take a transition
 const router = useTransitionRouter();
 router.push('/item/42', { name: 'deliveryBike', accent: '#F7BE01', origin: originFromEvent(e), withAnchor: true });
-router.back();   // quick cross-fade: nobody is made to wait
+router.back();   // quick "slide away" (300 ms): nobody is made to wait
 ```
 
 `router.push(href, options)` takes the transition options **and** Expo Router's own options (`withAnchor`...) in the same
-object. `back`, `dismiss` and `dismissAll` use the quick fade.
+object. `back`, `dismiss` and `dismissAll` use the quick `dismiss` animation (the screen you leave slides down and fades).
 
 ### Back on the opted-in screens
 
-Those screens have no native animation, so a plain back is instant. To fade them back with the hardware back button:
+Those screens have no native animation, so a plain back (`useRouter().back()`) is instant. Use the transition router in your back button, and animate the hardware back button too:
 
 ```tsx
 useTransitionBackHandler({ fadeBack: (pathname) => pathname.startsWith('/item/') });
 ```
-(`fadeBack: true` = every screen. Default `false`.) In your own back buttons use `useTransitionRouter().back()`.
+(`fadeBack: true` = every screen. Default `false`.) In your own back buttons use `const { back } = useTransitionRouter();`.
 
 ### Delivery transitions: tell them where the elements are
 

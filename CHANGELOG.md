@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+- **Fixed: the slices showed the OLD screen (again).** The new screen was accepted as "on screen" as soon as its view
+  tree changed, but the new screen's views can be attached while the old screen is still what is DRAWN. The new screen
+  now has to be confirmed by a tiny picture of what is drawn (clearly another screen than the frozen one). The view tree
+  alone is only trusted for screens that look almost the same as the old one, 700 ms after it changed.
+- **If the new screen is never detected, nothing is animated** (the overlay is removed and the real screen shows),
+  instead of animating a stale picture. `screenReady()` now answers `true` / `false`.
+- **New BACK animation `dismiss`:** the screen you leave slides down, shrinks and fades away while the screen below
+  brightens (300 ms), on Android and iOS. `back()`, `dismiss()`, `dismissAll()` and `useTransitionBackHandler` use it.
+  (`fade` is still available: `{ name: 'fade' }`.)
+
 ## 0.3.1 (performance pass)
 
 - **Android: the parcel (box + tape + logo) is drawn ONCE into a small bitmap** and only moved per frame. Before, the

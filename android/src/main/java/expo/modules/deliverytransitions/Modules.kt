@@ -51,14 +51,14 @@ class DeliveryTransitionsModule : Module() {
     AsyncFunction("screenReady") { timeoutMs: Int, promise: Promise ->
       val activity = appContext.currentActivity
       if (activity == null) {
-        promise.resolve()
+        promise.resolve(false)
         return@AsyncFunction
       }
       activity.runOnUiThread {
         try {
-          TransitionController.waitForScreen(activity, timeoutMs) { promise.resolve() }
+          TransitionController.waitForScreen(activity, timeoutMs) { ready -> promise.resolve(ready) }
         } catch (t: Throwable) {
-          promise.resolve()
+          promise.resolve(false)
         }
       }
     }

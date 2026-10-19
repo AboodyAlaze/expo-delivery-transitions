@@ -8,8 +8,11 @@ export type NativeTransitions = {
   play(optionsJson: string): Promise<void>;
   /** Start the animation right now (the vehicle arrives and waits) while the new screen renders. */
   preroll?(optionsJson: string): void;
-  /** Resolves when the NEW screen is really on screen (its view tree or picture changed), or after `timeoutMs`. */
-  screenReady?(timeoutMs: number): Promise<void>;
+  /**
+   * Resolves `true` when the NEW screen is really on screen (what is drawn is clearly another screen), `false` if it
+   * never showed up within `timeoutMs`.
+   */
+  screenReady?(timeoutMs: number): Promise<boolean | void>;
   /** The data of a loading element arrived, take a fresh picture and let the vehicle go on. */
   refresh?(): void;
   skip(): void;

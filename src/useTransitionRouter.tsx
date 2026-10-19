@@ -83,13 +83,13 @@ export function useTransitionRouter(defaults: TransitionOptions = {}) {
       navigate: forward(router.navigate),
       replace: forward(router.replace),
       dismissTo: forward(router.dismissTo),
-      // going BACK is a normal, quick cross-fade: nobody is made to wait
+      // going BACK is a quick "slide away" (300 ms): nobody is made to wait
       back: (options?: TransitionOptions) =>
-        runTransition({ name: 'fade', ...options }, () => router.back()),
+        runTransition({ name: 'dismiss', ...options }, () => router.back()),
       dismiss: (count?: number, options?: TransitionOptions) =>
-        runTransition({ name: 'fade', ...options }, () => router.dismiss(count)),
+        runTransition({ name: 'dismiss', ...options }, () => router.dismiss(count)),
       dismissAll: (options?: TransitionOptions) =>
-        runTransition({ name: 'fade', ...options }, () => router.dismissAll()),
+        runTransition({ name: 'dismiss', ...options }, () => router.dismissAll()),
     };
   }, [router, name, accent, durationMs]);
 }
@@ -127,7 +127,7 @@ export function useTransitionBackHandler({ fadeBack = false }: BackHandlerOption
         }
         const fade = typeof fadeBack === 'function' ? fadeBack(pathname) : fadeBack;
         if (fade && router.canGoBack()) {
-          runTransition({ name: 'fade' }, () => router.back());
+          runTransition({ name: 'dismiss' }, () => router.back());
           return true;
         }
         return false; // not ours: Expo Router handles it as usual

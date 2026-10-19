@@ -95,6 +95,31 @@ internal class FadeTransition : Transition() {
   }
 }
 
+/**
+ * BACK. The screen you leave slides down a little, shrinks and fades away, uncovering the screen you return to (which
+ * starts slightly dimmed and brightens). Quick (300 ms): nobody is made to wait.
+ */
+internal class DismissTransition : Transition() {
+  override val defaultMs = 300
+  override fun interpolator(): TimeInterpolator = FAST_OUT_SLOW_IN
+
+  override fun draw(c: Canvas, from: Bitmap, to: Bitmap, p: Float, w: Float, h: Float) {
+    val e = p.coerceIn(0f, 1f)
+    c.drawBitmap(to, 0f, 0f, null)
+    if (e < 1f) {
+      c.drawColor(Color.argb(((1f - e) * 70f).toInt(), 0, 0, 0)) // the screen below brightens as the top one leaves
+      val s = 1f - 0.06f * e
+      c.save()
+      c.translate(0f, h * 0.14f * e)
+      c.scale(s, s, w / 2f, h / 2f)
+      fill.alpha = ((1f - e) * 255f).toInt()
+      c.drawBitmap(from, 0f, 0f, fill)
+      fill.alpha = 255
+      c.restore()
+    }
+  }
+}
+
 internal class CurtainTransition : Transition() {
   override val defaultMs = 1300
   override fun interpolator(): TimeInterpolator = LinearInterpolator()
@@ -270,6 +295,7 @@ internal fun createTransition(name: String): Transition = when (name) {
   "deliveryBike" -> DeliveryTransition(car = false)
   "deliveryCar" -> DeliveryTransition(car = true)
   "liquidPour" -> LiquidPourTransition()
+  "dismiss" -> DismissTransition()
   "ballZoom" -> BallZoomTransition()
   "radarSweep" -> RadarTransition()
   "hexAperture" -> HexTransition()

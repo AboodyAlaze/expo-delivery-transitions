@@ -67,6 +67,35 @@ final class FadeTransition: Transition {
   }
 }
 
+/// BACK. The screen you leave slides down a little, shrinks and fades away, uncovering the screen you return to (which
+/// starts slightly dimmed and brightens). Quick (300 ms): nobody is made to wait.
+final class DismissTransition: Transition {
+  var defaultMs: Int { return 300 }
+  var easing: (Double) -> Double { return { fastOutSlowIn.value($0) } }
+  var showsSkipHint: Bool { return false }
+  private let scrim = CALayer()
+  private var height: CGFloat = 0
+
+  func prepare(host: TransitionView, req: TransitionRequest) {
+    height = host.bounds.height
+    host.toContainer.opacity = 1  // the screen below is already there
+    scrim.frame = host.bounds
+    scrim.backgroundColor = UIColor.black.cgColor
+    host.stage.zPosition = 0.5  // above the screen below...
+    host.stage.addSublayer(scrim)
+    host.fromLayer.zPosition = 1  // ...and below the screen that leaves
+  }
+
+  func update(p: F, host: TransitionView) {
+    let e = clamp01(p)
+    scrim.opacity = Float((1 - e) * 0.27)
+    let s = 1 - 0.06 * e
+    let move = CATransform3DMakeTranslation(0, height * 0.14 * e, 0)
+    host.fromLayer.transform = CATransform3DConcat(CATransform3DMakeScale(s, s, 1), move)
+    host.fromLayer.opacity = Float(1 - e)
+  }
+}
+
 final class CurtainTransition: Transition {
   var defaultMs: Int { return 1300 }
   var easing: (Double) -> Double { return { $0 } }
@@ -283,6 +312,7 @@ func createTransition(_ name: String) -> Transition {
   switch name {
   case "deliveryBike": return DeliveryTransition(car: false)
   case "deliveryCar": return DeliveryTransition(car: true)
+  case "dismiss": return DismissTransition()
   case "liquidPour": return LiquidPourTransition()
   case "ballZoom": return BallZoomTransition()
   case "radarSweep": return RadarTransition()

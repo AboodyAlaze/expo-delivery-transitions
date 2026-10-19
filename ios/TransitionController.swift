@@ -52,30 +52,42 @@ final class TransitionController {
     v.startWaiting(t, req: req)
   }
 
-  /// Calls `done` when the NEW screen is really on screen (the view tree changed, or the picture is clearly another
-  /// screen), two frames later so it is laid out, or after `timeoutMs`. Cheap: no full screenshots while waiting.
-  func waitForScreen(timeoutMs: Int, done: @escaping () -> Void) {
+  /// Calls `done(true)` when the NEW screen is really on screen, `done(false)` if it never showed up in `timeoutMs`.
+  ///
+  /// What counts is what is DRAWN: a tiny grey picture of the screen (45 x 100) must be clearly another screen than the
+  /// frozen one. A changed view tree alone is NOT enough (the new screen's views can be attached while the old screen is
+  /// still what is drawn). Only a screen that looks almost the same as the old one is accepted by its view tree, 700 ms
+  /// after the tree changed. Cheap on purpose: counting views costs about 1 ms; the picture is taken every 250 ms (every
+  /// 60 ms once the tree changed) and slower screens are probed less often.
+  func waitForScreen(timeoutMs: Int, done: @escaping (Bool) -> Void) {
     guard isRunning, let root = rootView, let win = window else {
-      done()
+      done(false)
       return
     }
     let started = CACurrentMediaTime()
-    var nextProbeAt = started + 0.2  // the view count catches almost every screen; the picture is only the second opinion
+    var nextProbeAt = started + 0.2
+    var treeChangedAt: CFTimeInterval = -1
     func poll() {
-      if !self.isRunning { done(); return }
+      if !self.isRunning { done(false); return }
       let now = CACurrentMediaTime()
-      var changed = abs(TransitionController.viewCount(root) - self.fromCount) >= 25
-      if !changed && now >= nextProbeAt {
+      if treeChangedAt < 0 && abs(TransitionController.viewCount(root) - self.fromCount) >= 25 {
+        treeChangedAt = now
+        nextProbeAt = now  // the new screen is about to appear: look at the picture right now
+      }
+      var verified = false
+      if now >= nextProbeAt {
         let s = CACurrentMediaTime()
         let probeNow = TransitionController.probe(root, window: win)
-        changed = TransitionController.meanDiff(probeNow, self.fromProbe) >= 6
-        // never let the watching cost the app more than about 4% of one core: slow screens are probed less often
+        verified = TransitionController.meanDiff(probeNow, self.fromProbe) >= 6
         let cost = CACurrentMediaTime() - s
-        nextProbeAt = CACurrentMediaTime() + max(0.25, cost * 25)
+        nextProbeAt = CACurrentMediaTime() + max(treeChangedAt >= 0 ? 0.06 : 0.25, cost * 8)
       }
-      if changed || (now - started) * 1000 >= Double(timeoutMs) {
+      let similarScreen = treeChangedAt >= 0 && now - treeChangedAt >= 0.7
+      if verified || similarScreen {
         // one frame, so the new screen is laid out before it is photographed
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.017) { done() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.017) { done(true) }
+      } else if (now - started) * 1000 >= Double(timeoutMs) {
+        done(false)
       } else {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.033) { poll() }
       }
