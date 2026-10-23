@@ -113,6 +113,31 @@ describe('runTransition (with a native module)', () => {
     expect(fake.play).toHaveBeenCalledTimes(1);
   });
 
+  it('sends the tapped card rectangle to the native side (cardExpand)', async () => {
+    await runTransition(
+      { name: 'cardExpand', originRect: { x: 20, y: 120, width: 300, height: 180 } },
+      () => {}
+    );
+    const json = JSON.parse(fake.play.mock.calls[0][0] as string);
+    expect(json.name).toBe('cardExpand');
+    expect(json.originRect).toEqual({ x: 20, y: 120, width: 300, height: 180 });
+  });
+
+  it('single-bag delivery starts the vehicle at once, like the other delivery modes', async () => {
+    await runTransition({ name: 'deliveryBikeBag' }, () => calls.push('navigate'));
+    expect(calls).toEqual(['begin', 'preroll', 'navigate', 'screenReady', 'play']);
+    const json = JSON.parse(fake.play.mock.calls[0][0] as string);
+    expect(json.name).toBe('deliveryBikeBag');
+  });
+
+  it('waits long for a forward screen (3 s) but never long when going back (0.7 s)', async () => {
+    await runTransition({ name: 'deliveryCarBag' }, () => {});
+    expect(fake.screenReady.mock.calls[0][0]).toBe(3000);
+    resetFake();
+    await runTransition({ name: 'dismiss' }, () => {});
+    expect(fake.screenReady.mock.calls[0][0]).toBe(700);
+  });
+
   it('works with an older native build that has no screenReady / preroll', async () => {
     resetFake({ screenReady: undefined, preroll: undefined });
     const navigate = jest.fn(() => calls.push('navigate'));

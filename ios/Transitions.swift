@@ -11,6 +11,8 @@ struct TransitionRequest {
   let loading: [Bool]
   /// The solid colour behind everything while the animation runs (black by default).
   let background: UIColor
+  /// The element that was tapped (cardExpand): the card grows from this rectangle.
+  let originRect: CGRect?
 }
 
 /// One animation between two screenshots. `p` goes 0 -> 1 (it may overshoot for "elastic" easings).
@@ -93,6 +95,75 @@ final class DismissTransition: Transition {
     let move = CATransform3DMakeTranslation(0, height * 0.14 * e, 0)
     host.fromLayer.transform = CATransform3DConcat(CATransform3DMakeScale(s, s, 1), move)
     host.fromLayer.opacity = Float(1 - e)
+  }
+}
+
+/// APP STORE CARD. The tapped card grows to fill the screen and becomes the new page, while the old screen steps back
+/// and dims behind it (like the App Store "Today" cards). Needs the rectangle of the tapped element (`originRect`).
+final class CardExpandTransition: Transition {
+  var defaultMs: Int { return 480 }
+  var easing: (Double) -> Double { return { fastOutSlowIn.value($0) } }
+  var showsSkipHint: Bool { return false }
+  private let scrim = CALayer()
+  private let cardFrom = CALayer()
+  private let cardTo = CALayer()
+  private var card = CGRect.zero
+  private var size = CGSize.zero
+
+  func prepare(host: TransitionView, req: TransitionRequest) {
+    size = host.bounds.size
+    host.backgroundColor = req.background
+    let screen = CGRect(origin: .zero, size: size)
+    var r = req.originRect ?? CGRect.zero
+    if r.width <= 8 || r.height <= 8 {
+      // no rectangle: a card around the touch point (or the middle of the screen)
+      let cx = req.origin.x > 0 ? req.origin.x : size.width / 2
+      let cy = req.origin.y > 0 ? req.origin.y : size.height / 2
+      r = CGRect(x: cx - 90, y: cy - 60, width: 180, height: 120)
+    }
+    r = r.intersection(screen)
+    if r.isNull || r.width < 8 || r.height < 8 {
+      r = CGRect(x: size.width / 2 - 90, y: size.height / 2 - 60, width: 180, height: 120)
+    }
+    card = r
+
+    let scale = host.fromImage.scale
+    scrim.frame = host.bounds
+    scrim.backgroundColor = UIColor.black.cgColor
+    scrim.opacity = 0
+    for layer in [cardFrom, cardTo] {
+      layer.contentsGravity = .resizeAspectFill  // the picture covers the card, centred, never squashed
+      layer.contentsScale = scale
+      layer.masksToBounds = true
+    }
+    if let cg = host.fromImage.cgImage {
+      cardFrom.contents = cg.cropping(
+        to: CGRect(x: r.minX * scale, y: r.minY * scale, width: r.width * scale, height: r.height * scale))
+    }
+    cardTo.contents = host.toImage?.cgImage
+    cardTo.opacity = 0
+    host.toContainer.opacity = 0
+    host.stage.addSublayer(scrim)
+    host.stage.addSublayer(cardFrom)
+    host.stage.addSublayer(cardTo)
+  }
+
+  func update(p: F, host: TransitionView) {
+    let e = clamp01(p)
+    let s = 1 - 0.06 * e
+    host.fromLayer.transform = CATransform3DMakeScale(s, s, 1)
+    scrim.opacity = Float(e * 0.59)
+    let l = lf(card.minX, 0, e)
+    let t = lf(card.minY, 0, e)
+    let r = lf(card.maxX, size.width, e)
+    let b = lf(card.maxY, size.height, e)
+    let radius = lf(18, 0, e)
+    for layer in [cardFrom, cardTo] {
+      layer.bounds = CGRect(x: 0, y: 0, width: r - l, height: b - t)
+      layer.position = CGPoint(x: (l + r) / 2, y: (t + b) / 2)
+      layer.cornerRadius = radius
+    }
+    cardTo.opacity = Float(smoothStep((e - 0.05) / 0.40))
   }
 }
 
@@ -313,6 +384,9 @@ func createTransition(_ name: String) -> Transition {
   case "deliveryBike": return DeliveryTransition(car: false)
   case "deliveryCar": return DeliveryTransition(car: true)
   case "dismiss": return DismissTransition()
+  case "cardExpand": return CardExpandTransition()
+  case "deliveryBikeBag": return DeliveryTransition(car: false, bag: true)
+  case "deliveryCarBag": return DeliveryTransition(car: true, bag: true)
   case "liquidPour": return LiquidPourTransition()
   case "ballZoom": return BallZoomTransition()
   case "radarSweep": return RadarTransition()

@@ -22,11 +22,13 @@ internal class Plan(
   val y0: Float,
   val y1: Float,
   lead: Float,
+  flyLen: Float = if (car) 0.09f else 0.10f,
+  openLen: Float = if (car) 0.08f else 0.09f,
 ) {
   val n = ys.size
   val dwell = if (car) 0.045f else 0f
-  val fly = if (car) 0.09f else 0.10f
-  val open = if (car) 0.08f else 0.09f
+  val fly = flyLen
+  val open = openLen
   private val stopY = FloatArray(n) { ys[it] - lead }
   private val speed = (y1 - y0) / (RIDE_SPAN - n * dwell)
   val arrive = FloatArray(n)
@@ -95,8 +97,9 @@ internal class Plan(
  * boundaries come from the real elements (<DeliveryTarget>, or five equal bands when there are none), and every
  * slice opens where its parcel lands.
  */
-internal class DeliveryTransition(private val car: Boolean) : Transition() {
-  override val defaultMs = if (car) 1400 else 1200
+internal class DeliveryTransition(private val car: Boolean, private val bag: Boolean = false) : Transition() {
+  // bag = ONE parcel to the middle of the screen that grows into the new page (the other mode: five parcels, five slices)
+  override val defaultMs = if (bag) (if (car) 1500 else 1400) else (if (car) 1400 else 1200)
   override fun interpolator() = LinearInterpolator()
 
   private lateinit var art: VehicleArt
@@ -116,6 +119,7 @@ internal class DeliveryTransition(private val car: Boolean) : Transition() {
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
   private val src = Rect()
   private val dst = RectF()
+  private val sheet = Sheet() // the bag, growing into the new page
   private var sprite: Bitmap? = null // the parcel (box + tape + logo), drawn ONCE; per frame it is only moved
   private var spriteSize = 0
   private val mark = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -200,17 +204,28 @@ internal class DeliveryTransition(private val car: Boolean) : Transition() {
     laneX = (if (car) 52f else 40f) * d
     roadTop = -90f * d
     val found = elements(req.targets, req.loading, w, h)
-    val items = found.map { it.rect }
-    loadIdx = found.indexOfFirst { it.loading }
-    n = items.size
-    tiles = tile(items, w, h)
-    cx = FloatArray(n) { items[it].centerX() }
-    cy = FloatArray(n) { items[it].centerY() }
+    if (bag) {
+      // one parcel, to the middle of the screen; the vehicle waits for the data of the first loading element, if any
+      n = 1
+      loadIdx = if (req.loading.any { it }) 0 else -1
+      tiles = emptyArray()
+      cx = floatArrayOf(w / 2f)
+      cy = floatArrayOf(h / 2f)
+    } else {
+      val items = found.map { it.rect }
+      loadIdx = found.indexOfFirst { it.loading }
+      n = items.size
+      tiles = tile(items, w, h)
+      cx = FloatArray(n) { items[it].centerX() }
+      cy = FloatArray(n) { items[it].centerY() }
+    }
     val y1 = h + 90f * d
     val lead = (if (car) 40f else 46f) * d
     // continue from where the vehicle is waiting (never below the first stop, or it would have to drive backwards)
     val y0 = if (waited) minOf(lastVy, cy[0] - lead - 8f * d) else roadTop
-    plan = Plan(FloatArray(n) { cy[it] }, car, y0, y1, lead)
+    plan =
+      if (bag) Plan(FloatArray(n) { cy[it] }, car, y0, y1, lead, flyLen = 0.16f, openLen = 0.34f)
+      else Plan(FloatArray(n) { cy[it] }, car, y0, y1, lead)
     makeSprite()
   }
 
@@ -260,7 +275,7 @@ internal class DeliveryTransition(private val car: Boolean) : Transition() {
     }
 
     // every slice of the new screen opens where its parcel landed
-    for (j in 0 until n) {
+    for (j in 0 until (if (bag) 0 else n)) {
       val pj = if (split >= 0f && pl.toss(j) < split) p + lag else p
       val t = ((pj - pl.toss(j) - pl.fly) / pl.open).coerceIn(0f, 1f)
       if (t <= 0f) continue
@@ -284,6 +299,8 @@ internal class DeliveryTransition(private val car: Boolean) : Transition() {
       }
     }
 
+    if (bag) drawBag(c, to, pl, p, w, h)
+
     // at the very end the complete real screen takes over
     val fa = smoothStep((p - 0.93f) / 0.07f)
     if (fa > 0f) {
@@ -295,12 +312,50 @@ internal class DeliveryTransition(private val car: Boolean) : Transition() {
     drawOverlay(c, pl, p, lag, split)
   }
 
+  private fun drawSprite(c: Canvas, sp: Bitmap, x: Float, y: Float, k: Float, rot: Float, alpha: Float) {
+    c.save()
+    c.translate(x, y)
+    c.rotate(rot)
+    c.scale(k, k)
+    paint.alpha = (alpha.coerceIn(0f, 1f) * 255f).toInt()
+    c.drawBitmap(sp, -spriteSize / 2f, -spriteSize / 2f, paint)
+    paint.alpha = 255
+    c.restore()
+  }
+
+  /** The one parcel: thrown to the middle of the screen, then it grows (a box that opens) into the new page. */
+  private fun drawBag(c: Canvas, to: Bitmap, pl: Plan, p: Float, w: Float, h: Float) {
+    val sp = sprite ?: return
+    val ts = pl.toss(0)
+    val fl = ((p - ts) / pl.fly).coerceIn(0f, 1f)
+    val ex = ((p - ts - pl.fly) / pl.open).coerceIn(0f, 1f)
+    if (fl > 0f && ex <= 0f) {
+      val vyT = pl.yAt(ts)
+      val sx = if (car) laneX else laneX + 40f * d // out of the trunk / out of the rider's hand
+      val sy = if (car) vyT - 56f * d else vyT + 4f * d
+      val x = lf(sx, cx[0], fl)
+      val y = lf(sy, cy[0], fl) - 90f * d * 4f * fl * (1f - fl)
+      val born = 0.5f + 0.5f * smoothStep(fl / 0.2f)
+      drawSprite(c, sp, x, y, born, 720f * fl, 1f) // two full turns: the logo lands upright
+    } else if (ex > 0f) {
+      val g = smoothStep(ex)
+      val half = 25f * d
+      val l = lf(cx[0] - half, 0f, g)
+      val t = lf(cy[0] - half, 0f, g)
+      val r = lf(cx[0] + half, w, g)
+      val b = lf(cy[0] + half, h, g)
+      sheet.draw(c, to, l, t, r, b, lf(12f * d, 0f, g), smoothStep(ex / 0.35f))
+      val k = minOf((r - l) / (50f * d), 1.8f)
+      drawSprite(c, sp, (l + r) / 2f, (t + b) / 2f, k, 0f, 1f - smoothStep(ex / 0.4f))
+    }
+  }
+
   private fun drawOverlay(c: Canvas, pl: Plan, p: Float, lag: Float, split: Float) {
     val vy = pl.yAt(p)
     val active = p >= RIDE_START && p < pl.endT && vy < pl.y1 - 1f && (waited || vy > pl.y0 + 1f)
 
     // parcels in the air
-    for (j in 0 until n) {
+    for (j in 0 until (if (bag) 0 else n)) {
       val ts = pl.toss(j)
       val pj = if (split >= 0f && ts < split) p + lag else p
       val fl = ((pj - ts) / pl.fly).coerceIn(0f, 1f)

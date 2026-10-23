@@ -32,6 +32,8 @@ internal class TransitionRequest(
   val loading: List<Boolean> = emptyList(),
   /** The solid colour behind everything while the animation runs (black by default). */
   val background: Int = 0xFF000000.toInt(),
+  /** The element that was tapped (cardExpand): the card grows from this rectangle. */
+  val originRect: RectF? = null,
 )
 
 /** One animation between two screenshots. [p] goes 0 -> 1 (it may overshoot for "elastic" easings). */
@@ -117,6 +119,89 @@ internal class DismissTransition : Transition() {
       fill.alpha = 255
       c.restore()
     }
+  }
+}
+
+/** A rounded rectangle filled with a picture: "aspect fill" (the picture covers the rectangle, centred, never squashed). */
+internal class Sheet {
+  private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
+  private val matrix = Matrix()
+  private var shader: BitmapShader? = null
+  private var shaderFor: Bitmap? = null
+
+  /** [src] = the part of the picture that fills the rectangle (default: all of it). */
+  fun draw(c: Canvas, bmp: Bitmap, l: Float, t: Float, r: Float, b: Float, radius: Float, alpha: Float, src: RectF? = null) {
+    if (alpha <= 0f || r - l < 1f || b - t < 1f || bmp.isRecycled) return
+    var sh = shader
+    if (shaderFor !== bmp || sh == null) {
+      bmp.setHasMipMap(true) // the picture is shown very small at first: mipmaps keep it smooth
+      sh = BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+      shader = sh
+      shaderFor = bmp
+    }
+    val sw = src?.width() ?: bmp.width.toFloat()
+    val sh2 = src?.height() ?: bmp.height.toFloat()
+    val scx = src?.centerX() ?: (bmp.width / 2f)
+    val scy = src?.centerY() ?: (bmp.height / 2f)
+    val s = max((r - l) / sw, (b - t) / sh2)
+    matrix.setScale(s, s)
+    matrix.postTranslate((l + r) / 2f - scx * s, (t + b) / 2f - scy * s)
+    sh.setLocalMatrix(matrix)
+    paint.shader = sh
+    paint.alpha = (alpha.coerceIn(0f, 1f) * 255f).toInt()
+    c.drawRoundRect(l, t, r, b, radius, radius, paint)
+  }
+}
+
+/**
+ * APP STORE CARD. The tapped card grows to fill the screen and becomes the new page, while the old screen steps back
+ * and dims behind it (like the App Store "Today" cards). Needs the rectangle of the tapped element (`originRect`).
+ */
+internal class CardExpandTransition : Transition() {
+  override val defaultMs = 480
+  override fun interpolator(): TimeInterpolator = FAST_OUT_SLOW_IN
+
+  private val card = RectF()
+  private val toSheet = Sheet()
+  private val fromSheet = Sheet()
+  private var d = 1f
+  private var bg = Color.BLACK
+
+  override fun prepare(from: Bitmap, to: Bitmap, w: Float, h: Float, req: TransitionRequest) {
+    d = req.density
+    bg = req.background
+    val o = req.originRect
+    if (o != null && o.width() > 8f && o.height() > 8f) {
+      card.set(o)
+    } else {
+      // no rectangle: a card around the touch point (or the middle of the screen)
+      val cx = if (req.originX > 0f) req.originX else w / 2f
+      val cy = if (req.originY > 0f) req.originY else h / 2f
+      card.set(cx - 90f * d, cy - 60f * d, cx + 90f * d, cy + 60f * d)
+    }
+    if (!card.intersect(0f, 0f, w, h) || card.width() < 8f || card.height() < 8f) {
+      card.set(w / 2f - 90f * d, h / 2f - 60f * d, w / 2f + 90f * d, h / 2f + 60f * d)
+    }
+  }
+
+  override fun draw(c: Canvas, from: Bitmap, to: Bitmap, p: Float, w: Float, h: Float) {
+    val e = p.coerceIn(0f, 1f)
+    c.drawColor(bg)
+    // the old screen steps back and dims
+    val s = 1f - 0.06f * e
+    c.save()
+    c.scale(s, s, w / 2f, h / 2f)
+    c.drawBitmap(from, 0f, 0f, null)
+    c.restore()
+    c.drawColor(Color.argb((e * 150f).toInt(), 0, 0, 0))
+    // the card grows to the whole screen: its own picture turns into the new page
+    val l = lf(card.left, 0f, e)
+    val t = lf(card.top, 0f, e)
+    val r = lf(card.right, w, e)
+    val b = lf(card.bottom, h, e)
+    val radius = lf(18f * d, 0f, e)
+    fromSheet.draw(c, from, l, t, r, b, radius, 1f, card)
+    toSheet.draw(c, to, l, t, r, b, radius, smoothStep((e - 0.05f) / 0.40f))
   }
 }
 
@@ -296,6 +381,9 @@ internal fun createTransition(name: String): Transition = when (name) {
   "deliveryCar" -> DeliveryTransition(car = true)
   "liquidPour" -> LiquidPourTransition()
   "dismiss" -> DismissTransition()
+  "cardExpand" -> CardExpandTransition()
+  "deliveryBikeBag" -> DeliveryTransition(car = false, bag = true)
+  "deliveryCarBag" -> DeliveryTransition(car = true, bag = true)
   "ballZoom" -> BallZoomTransition()
   "radarSweep" -> RadarTransition()
   "hexAperture" -> HexTransition()

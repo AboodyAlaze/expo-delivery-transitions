@@ -1,8 +1,9 @@
 import { Link, usePathname, useRouter, type Href, type LinkProps } from 'expo-router';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   BackHandler,
   Pressable,
+  View,
   type GestureResponderEvent,
   type NativeEventSubscription,
   type PressableProps,
@@ -34,6 +35,7 @@ function split(options?: ForwardOptions): { transition: TransitionOptions; nav: 
     debug,
     background,
     screenTimeoutMs,
+    originRect,
     ...nav
   } = options ?? {};
   return {
@@ -48,6 +50,7 @@ function split(options?: ForwardOptions): { transition: TransitionOptions; nav: 
       debug,
       background,
       screenTimeoutMs,
+      originRect,
     },
     nav: nav as NavOptions,
   };
@@ -156,14 +159,26 @@ export function TransitionPressable({
   ...rest
 }: TransitionPressableProps) {
   const router = useTransitionRouter();
+  const ref = useRef<View>(null);
   return (
     <Pressable
       {...rest}
+      ref={ref}
       onPress={(e) => {
         onPress?.(e);
         const options: TransitionOptions = { origin: originFromEvent(e), ...transition };
-        if (replace) router.replace(href, options);
-        else router.push(href, options);
+        const go = (o: TransitionOptions) => {
+          if (replace) router.replace(href, o);
+          else router.push(href, o);
+        };
+        if (options.name === 'cardExpand' && !options.originRect && ref.current) {
+          // the card grows from this very element: measure it first
+          ref.current.measureInWindow((x, y, width, height) =>
+            go({ ...options, originRect: { x, y, width, height } })
+          );
+        } else {
+          go(options);
+        }
       }}
     />
   );
@@ -191,8 +206,26 @@ export function TransitionLink({ transition, onPress, ...props }: TransitionLink
         // <Link> skips its own navigation when the event is default-prevented (Expo Router 57, native)
         event.preventDefault();
         const options: TransitionOptions = { origin: originFromEvent(event), ...transition };
-        if (props.replace) router.replace(href, options);
-        else router.push(href, options);
+        const go = (o: TransitionOptions) => {
+          if (props.replace) router.replace(href, o);
+          else router.push(href, o);
+        };
+        const target = (event as unknown as { currentTarget?: { measureInWindow?: unknown } })
+          .currentTarget;
+        if (
+          options.name === 'cardExpand' &&
+          !options.originRect &&
+          typeof target?.measureInWindow === 'function'
+        ) {
+          // the card grows from the pressed element: measure it first
+          (
+            target.measureInWindow as (
+              cb: (x: number, y: number, w: number, h: number) => void
+            ) => void
+          )((x, y, width, height) => go({ ...options, originRect: { x, y, width, height } }));
+        } else {
+          go(options);
+        }
       }}
     />
   );

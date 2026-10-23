@@ -261,6 +261,13 @@ internal object TransitionController {
         }
       }
     }
+    val orr = o.optJSONObject("originRect")
+    val originRect =
+      if (orr != null) {
+        val x = orr.optDouble("x", 0.0).toFloat() * d
+        val y = orr.optDouble("y", 0.0).toFloat() * d
+        RectF(x, y, x + orr.optDouble("width", 0.0).toFloat() * d, y + orr.optDouble("height", 0.0).toFloat() * d)
+      } else null
     return TransitionRequest(
       name = o.optString("name", "fade"),
       originX = o.optDouble("originX", 0.0).toFloat() * d,
@@ -271,6 +278,7 @@ internal object TransitionController {
       density = d,
       loading = flags,
       background = o.optLong("background", 0xFF000000L).toInt() or 0xFF000000.toInt(), // always opaque
+      originRect = originRect,
     )
   }
 

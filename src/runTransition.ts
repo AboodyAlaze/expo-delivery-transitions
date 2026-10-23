@@ -71,7 +71,11 @@ export async function runTransition(
     const name = options.name ?? 'fade';
     const accent = asColor(options.accent ?? '#7C5CFF', 0xff7c5cff);
     const background = asColor(options.background ?? '#000000', 0xff000000);
-    const wantsTargets = name === 'deliveryBike' || name === 'deliveryCar';
+    const wantsTargets =
+      name === 'deliveryBike' ||
+      name === 'deliveryCar' ||
+      name === 'deliveryBikeBag' ||
+      name === 'deliveryCarBag';
     try {
       await native.begin();
       mark('screen frozen');
@@ -98,9 +102,9 @@ export async function runTransition(
     try {
       if (typeof native.screenReady === 'function') {
         // the native side watches the real screen (cheaply) and answers when the new one is on screen
-        // delivery: the screen may be slow to render (up to 3 s); other transitions (a quick fade back) never wait long
         const shown = await native.screenReady(
-          options.screenTimeoutMs ?? (wantsTargets ? 3000 : 700)
+          // going back never waits long; a forward screen may be slow to render (up to 3 s)
+          options.screenTimeoutMs ?? (name === 'fade' || name === 'dismiss' ? 700 : 3000)
         );
         if (shown === false) {
           // the new screen never showed up in the picture: do NOT animate a stale picture (it would show the old
@@ -167,6 +171,7 @@ export async function runTransition(
           accent,
           background,
           durationMs: options.durationMs ?? 0,
+          originRect: options.originRect ?? null,
           targets,
         })
       );

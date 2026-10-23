@@ -24,6 +24,27 @@ const DEMOS: Demo[] = [
     name: 'deliveryCar',
   },
   {
+    id: 'bag-bike',
+    title: 'Delivery · Bike (one bag)',
+    subtitle: 'One bag to the middle of the screen, it grows into the page',
+    color: '#F7BE01',
+    name: 'deliveryBikeBag',
+  },
+  {
+    id: 'bag-car',
+    title: 'Delivery · Car (one bag)',
+    subtitle: 'The car stops, throws one bag that opens into the page',
+    color: '#0D5379',
+    name: 'deliveryCarBag',
+  },
+  {
+    id: 'card-expand',
+    title: 'App Store card',
+    subtitle: 'The tapped card grows into the page',
+    color: '#E84393',
+    name: 'cardExpand',
+  },
+  {
     id: 'liquid-pour',
     title: 'Liquid glass pour',
     subtitle: 'The page pours down like thick glass',

@@ -1,6 +1,9 @@
 export type TransitionName =
   | 'deliveryBike'
   | 'deliveryCar'
+  | 'deliveryBikeBag'
+  | 'deliveryCarBag'
+  | 'cardExpand'
   | 'liquidPour'
   | 'ballZoom'
   | 'radarSweep'
@@ -23,6 +26,11 @@ export type TransitionOptions = {
   name?: TransitionName;
   /** Where the user touched, in dp (see `originFromEvent`). Radar / hex / ball zoom start exactly there. */
   origin?: { x: number; y: number };
+  /**
+   * The tapped element in dp (`measureInWindow`), for `cardExpand`: the card grows from this rectangle. `TransitionPressable`
+   * measures itself; with `router.push` pass it yourself (without it the card grows around the touch point).
+   */
+  originRect?: TransitionRect;
   /** Colour of the tapped item (liquid, ball, radar, parcel tape...). Any React Native colour. */
   accent?: string;
   /** 0 / undefined = the default duration of that transition. */

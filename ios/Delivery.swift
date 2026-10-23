@@ -17,7 +17,7 @@ final class Plan {
   let endT: F
   private let stopY: [F]
 
-  init(ys: [F], car: Bool, y0: F, y1: F, lead: F) {
+  init(ys: [F], car: Bool, y0: F, y1: F, lead: F, flyLen: F? = nil, openLen: F? = nil) {
     let count = ys.count
     let dw: F = car ? 0.045 : 0
     let stop = ys.map { $0 - lead }
@@ -33,8 +33,8 @@ final class Plan {
     self.y0 = y0
     self.y1 = y1
     self.dwell = dw
-    self.fly = car ? 0.09 : 0.10
-    self.unbox = car ? 0.08 : 0.09
+    self.fly = flyLen ?? (car ? 0.09 : 0.10)
+    self.unbox = openLen ?? (car ? 0.08 : 0.09)
     self.stopY = stop
     self.arrive = arr
     self.endT = end
@@ -153,11 +153,16 @@ final class DeliveryTransition: Transition {
   private var brake: F = 0
   private var trunk: F = 0
 
-  init(car: Bool) {
+  /// bag = ONE parcel to the middle of the screen that grows into the new page (the other mode: five parcels, five slices)
+  private let bag: Bool
+  private let sheetLayer = CALayer()
+
+  init(car: Bool, bag: Bool = false) {
     self.car = car
+    self.bag = bag
   }
 
-  var defaultMs: Int { return car ? 1400 : 1200 }
+  var defaultMs: Int { return bag ? (car ? 1500 : 1400) : (car ? 1400 : 1200) }
   var easing: (Double) -> Double { return { $0 } }
   var wantsOverlay: Bool { return false }
   var showsSkipHint: Bool { return false }
@@ -307,9 +312,16 @@ final class DeliveryTransition: Transition {
     dur = Double(req.durationMs > 0 ? req.durationMs : defaultMs) / 1000
 
     let found = elements(req.targets, req.loading, size)
-    items = found.map { $0.rect }
-    loadIdx = found.firstIndex { $0.loading } ?? -1
-    tiles = tile(items, size)
+    if bag {
+      // one parcel, to the middle of the screen; the vehicle waits for the data of the first loading element, if any
+      items = [CGRect(x: size.width / 2 - 1, y: size.height / 2 - 1, width: 2, height: 2)]
+      loadIdx = req.loading.contains(true) ? 0 : -1
+      tiles = []
+    } else {
+      items = found.map { $0.rect }
+      loadIdx = found.firstIndex { $0.loading } ?? -1
+      tiles = tile(items, size)
+    }
     cx = items.map { $0.midX }
     cy = items.map { $0.midY }
 
@@ -317,7 +329,10 @@ final class DeliveryTransition: Transition {
     let lead = (car ? 40 : 46) * d
     // continue from where the vehicle is waiting (never below the first stop, or it would have to drive backwards)
     let y0: F = waited ? min(lastVy, cy[0] - lead - 8 * d) : roadTop
-    plan = Plan(ys: cy, car: car, y0: y0, y1: y1, lead: lead)
+    plan =
+      bag
+      ? Plan(ys: cy, car: car, y0: y0, y1: y1, lead: lead, flyLen: 0.16, openLen: 0.34)
+      : Plan(ys: cy, car: car, y0: y0, y1: y1, lead: lead)
 
     // slices of the new screen: each one scales around the spot where its parcel lands
     for l in tileLayers { l.removeFromSuperlayer() }
@@ -335,6 +350,17 @@ final class DeliveryTransition: Transition {
         host.stage.addSublayer(layer)
         tileLayers.append(layer)
       }
+    }
+
+    // the bag grows into the new page: one layer whose picture covers it (centred, never squashed)
+    sheetLayer.removeFromSuperlayer()
+    if bag, let cg = host.toImage?.cgImage {
+      sheetLayer.contents = cg
+      sheetLayer.contentsGravity = .resizeAspectFill
+      sheetLayer.contentsScale = scale
+      sheetLayer.masksToBounds = true
+      sheetLayer.opacity = 0
+      host.stage.addSublayer(sheetLayer)
     }
 
     // parcels: one small sprite layer each, moved and rotated by the GPU
@@ -372,6 +398,46 @@ final class DeliveryTransition: Transition {
     }
   }
 
+  /// The one parcel: thrown to the middle of the screen, then it grows (a box that opens) into the new page.
+  private func updateBag(p: F, pl: Plan, host: TransitionView) {
+    guard let parcel = parcelLayers.first, !cx.isEmpty else { return }
+    let ts = pl.toss(0)
+    let fl = clamp01((p - ts) / pl.fly)
+    let ex = clamp01((p - ts - pl.fly) / pl.unbox)
+    if fl > 0 && ex <= 0 {
+      let vyT = pl.yAt(ts)
+      let sx = car ? laneX : laneX + 40 * d  // out of the trunk / out of the rider's hand
+      let sy = car ? vyT - 56 * d : vyT + 4 * d
+      let x = lf(sx, cx[0], fl)
+      let y = lf(sy, cy[0], fl) - 90 * d * 4 * fl * (1 - fl)
+      let born = 0.5 + 0.5 * smoothStep(fl / 0.2)
+      let rot = CATransform3DMakeRotation(720 * fl * F.pi / 180, 0, 0, 1)  // two full turns: the logo lands upright
+      parcel.position = CGPoint(x: x, y: y)
+      parcel.transform = CATransform3DConcat(rot, CATransform3DMakeScale(born, born, 1))
+      parcel.opacity = 1
+      sheetLayer.opacity = 0
+    } else if ex > 0 {
+      let size = host.bounds.size
+      let g = smoothStep(ex)
+      let half: F = 25 * d
+      let l = lf(cx[0] - half, 0, g)
+      let t = lf(cy[0] - half, 0, g)
+      let r = lf(cx[0] + half, size.width, g)
+      let b = lf(cy[0] + half, size.height, g)
+      sheetLayer.bounds = CGRect(x: 0, y: 0, width: r - l, height: b - t)
+      sheetLayer.position = CGPoint(x: (l + r) / 2, y: (t + b) / 2)
+      sheetLayer.cornerRadius = lf(12 * d, 0, g)
+      sheetLayer.opacity = Float(smoothStep(ex / 0.35))
+      let k = min((r - l) / (50 * d), 1.8)
+      parcel.position = CGPoint(x: (l + r) / 2, y: (t + b) / 2)
+      parcel.transform = CATransform3DMakeScale(k, k, 1)
+      parcel.opacity = Float(1 - smoothStep(ex / 0.4))
+    } else {
+      parcel.opacity = 0
+      sheetLayer.opacity = 0
+    }
+  }
+
   func update(p: F, host: TransitionView) {
     guard let pl = plan else { return }
     let lag: F = dur > 0 ? F(lastIdleMs / 1000 / dur) : 0
@@ -398,8 +464,10 @@ final class DeliveryTransition: Transition {
       }
     }
 
+    if bag { updateBag(p: p, pl: pl, host: host) }
+
     // parcels in the air
-    for j in 0..<parcelLayers.count {
+    for j in 0..<(bag ? 0 : parcelLayers.count) {
       let ts = pl.toss(j)
       let pj = (split >= 0 && ts < split) ? p + lag : p
       let fl = clamp01((pj - ts) / pl.fly)

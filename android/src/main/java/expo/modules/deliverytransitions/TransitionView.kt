@@ -217,7 +217,7 @@ internal class TransitionView(context: Context) : View(context) {
       return
     }
     t.draw(canvas, f, b, progress, width.toFloat(), height.toFloat())
-    if (t !is FadeTransition && t !is DismissTransition && t !is DeliveryTransition) drawHint(canvas)
+    if (t !is FadeTransition && t !is DismissTransition && t !is CardExpandTransition && t !is DeliveryTransition) drawHint(canvas)
   }
 
   private fun drawHint(c: Canvas) {

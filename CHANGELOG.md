@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- **New: `deliveryBikeBag` / `deliveryCarBag`: ONE bag.** The vehicle drives (and waits, with "?" bubbles, while the new
+  screen loads), throws a single bag to the middle of the screen, and the bag grows (a box that opens) into the new page.
+  Same instant start, same loading stop (`<DeliveryTarget loading>` makes the vehicle wait before it throws).
+- **New: `cardExpand` (App Store card).** The tapped card grows to fill the screen and becomes the new page while the old
+  screen steps back and dims. `TransitionPressable` measures the card by itself; with `router.push` pass `originRect`.
+- Android + iOS. New option `originRect`. Example app: three new cards.
+
 ## 0.4.0
 
 - **Fixed: the slices showed the OLD screen (again).** The new screen was accepted as "on screen" as soon as its view

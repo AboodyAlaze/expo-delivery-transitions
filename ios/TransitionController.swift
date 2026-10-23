@@ -266,6 +266,11 @@ final class TransitionController {
       }
     }
 
+    var originRect: CGRect?
+    if let r = obj["originRect"] as? [String: Any] {
+      originRect = CGRect(x: num(r, "x"), y: num(r, "y"), width: num(r, "width"), height: num(r, "height"))
+    }
+
     // the solid colour behind the animation: always opaque, black by default
     let bgRaw = (obj["background"] as? NSNumber)?.int64Value ?? 0xFF00_0000
     let bg = UInt32(truncatingIfNeeded: bgRaw)
@@ -279,7 +284,8 @@ final class TransitionController {
       durationMs: Int(num(obj, "durationMs")),
       targets: targets,
       loading: loading,
-      background: background
+      background: background,
+      originRect: originRect
     )
   }
 }

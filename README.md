@@ -89,6 +89,25 @@ useTransitionBackHandler({ fadeBack: (pathname) => pathname.startsWith('/item/')
 ```
 (`fadeBack: true` = every screen. Default `false`.) In your own back buttons use `const { back } = useTransitionRouter();`.
 
+### More transitions
+
+| name | |
+|---|---|
+| `deliveryBikeBag`, `deliveryCarBag` | **One bag.** The courier throws a single bag to the middle of the screen and it grows into the new page. While the screen loads the courier waits with "?" bubbles; with `<DeliveryTarget loading>` it waits before throwing until the data has arrived. |
+| `cardExpand` | **App Store card.** The tapped card grows to the full screen and becomes the page; the old screen steps back and dims. |
+| `dismiss` | The BACK animation (used by `back()` by default): the screen you leave slides down and fades. |
+
+`cardExpand` needs the rectangle of the tapped element. `TransitionPressable` measures itself:
+
+```tsx
+<TransitionPressable href="/story/1" transition={{ name: 'cardExpand' }}>
+  <Card />
+</TransitionPressable>
+
+// with router.push: pass the rectangle yourself (dp, measureInWindow); without it the card grows around the touch point
+router.push('/story/1', { name: 'cardExpand', originRect: { x, y, width, height } });
+```
+
 ### Delivery transitions: tell them where the elements are
 
 Wrap up to **5 elements of the destination screen** with `<DeliveryTarget index={0..4}>` (top to bottom). The courier
@@ -133,7 +152,8 @@ vehicle waits.
 
 | option | |
 |---|---|
-| `name` | `deliveryBike` \| `deliveryCar` \| `liquidPour` \| `ballZoom` \| `radarSweep` \| `hexAperture` \| `curtainDrop` \| `fade` |
+| `name` | `deliveryBike` \| `deliveryCar` \| `deliveryBikeBag` \| `deliveryCarBag` \| `cardExpand` \| `liquidPour` \| `ballZoom` \| `radarSweep` \| `hexAperture` \| `curtainDrop` \| `fade` |
+| `originRect` | `cardExpand` only: `{ x, y, width, height }` in dp of the tapped element (`TransitionPressable` fills it in) |
 | `origin` | `{ x, y }` in dp (`originFromEvent(e)`). Radar, hex and ball zoom start exactly there |
 | `accent` | colour of the tapped item: liquid, ball, radar, parcel tape… |
 | `background` | solid colour behind the animation, default `'#000000'` (nothing is see-through) |
